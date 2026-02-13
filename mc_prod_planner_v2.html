@@ -366,7 +366,12 @@
       gap:10px;
     }
     .modal-title h2{margin:0}
-    .modal-content{margin-top:10px}
+    .modal-content{
+      margin-top:10px;
+      max-height:70vh;
+      overflow:auto;
+      padding-right:4px;
+    }
     .two-col{
       display:grid;
       grid-template-columns: 1fr 1fr;
@@ -385,6 +390,23 @@
     .line-item select{flex:1; min-width:240px}
     .line-item .unit{min-width:46px; text-align:left; color:var(--muted); font-size:12px}
     .line-item .btn{padding:7px 9px}
+    .io-row{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:8px;
+    }
+    .io-input{ background:rgba(16,185,129,.08); }
+    .io-output{ background:rgba(59,130,246,.08); }
+    .kind-badge{
+      font-size:11px;
+      border:1px solid var(--border);
+      border-radius:999px;
+      padding:2px 8px;
+      color:var(--muted);
+      background:var(--panel);
+      min-width:56px;
+      text-align:center;
+    }
   </style>
 </head>
 <body>
@@ -695,6 +717,7 @@
   const modalTitle = $("#modalTitle");
   const modalContent = $("#modalContent");
   const btnCloseModal = $("#btnCloseModal");
+  let modalCloseGuard = null;
 
   // --------------------------
   // テーマ
@@ -1577,9 +1600,11 @@
     modalBackdrop.setAttribute("aria-hidden","false");
   }
   function closeModal(){
+    if(modalCloseGuard && !modalCloseGuard()) return;
     modalBackdrop.style.display = "none";
     modalBackdrop.setAttribute("aria-hidden","true");
     modalContent.innerHTML = "";
+    modalCloseGuard = null;
   }
   btnCloseModal.addEventListener("click", closeModal);
   modalBackdrop.addEventListener("click", (e) => {
@@ -1696,9 +1721,10 @@
     openModal(isEdit ? "素材を編集" : "素材を追加", wrap);
   }
 
-  function makeMatRow(draftArr, idx, onChange){
+  function makeMatRow(draftArr, idx, onChange, onDirty, rowRole){
     const row = document.createElement("div");
     row.className = "line-item";
+    row.classList.add("io-row", rowRole === "output" ? "io-output" : "io-input");
 
     draftArr[idx].useNew = !!draftArr[idx].useNew;
     draftArr[idx].newName = String(draftArr[idx].newName || "");
@@ -1726,6 +1752,8 @@
     sel.addEventListener("change", () => {
       draftArr[idx].matId = sel.value;
       unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
+      updateKindBadge();
+      if(onDirty) onDirty();
     });
 
     const newName = document.createElement("input");
@@ -1735,6 +1763,8 @@
     newName.addEventListener("input", () => {
       draftArr[idx].newName = String(newName.value || "");
       unit.textContent = unitOf(draftArr[idx].newKind);
+      updateKindBadge();
+      if(onDirty) onDirty();
     });
 
     const newKind = document.createElement("select");
@@ -1744,11 +1774,15 @@
     newKind.addEventListener("change", () => {
       draftArr[idx].newKind = (newKind.value === "fluid") ? "fluid" : "item";
       unit.textContent = unitOf(draftArr[idx].newKind);
+      updateKindBadge();
+      if(onDirty) onDirty();
     });
 
     mode.addEventListener("change", () => {
       draftArr[idx].useNew = (mode.value === "new");
       toggleMode();
+      updateKindBadge();
+      if(onDirty) onDirty();
     });
 
     const qty = document.createElement("input");
@@ -1759,10 +1793,19 @@
     qty.className = "qty";
     qty.addEventListener("input", () => {
       draftArr[idx].qty = safeNumber(qty.value);
+      if(onDirty) onDirty();
     });
 
     const unit = document.createElement("div");
     unit.className = "unit";
+
+    const kindBadge = document.createElement("span");
+    kindBadge.className = "kind-badge";
+
+    function updateKindBadge(){
+      const k = (!!draftArr[idx].useNew) ? draftArr[idx].newKind : (matById(sel.value)?.kind || "item");
+      kindBadge.textContent = (k === "fluid") ? "液体" : "アイテム";
+    }
 
     function toggleMode(){
       const useNew = !!draftArr[idx].useNew;
@@ -1771,6 +1814,7 @@
       newName.style.display = useNew ? "" : "none";
       newKind.style.display = useNew ? "" : "none";
       unit.textContent = useNew ? unitOf(draftArr[idx].newKind) : (sel.value ? unitOf(matById(sel.value)?.kind) : "");
+      updateKindBadge();
     }
 
     const del = document.createElement("button");
@@ -1778,6 +1822,7 @@
     del.textContent = "削除";
     del.addEventListener("click", () => {
       draftArr.splice(idx, 1);
+      if(onDirty) onDirty();
       onChange(true);
     });
 
@@ -1788,6 +1833,7 @@
     row.appendChild(newKind);
     row.appendChild(qty);
     row.appendChild(unit);
+    row.appendChild(kindBadge);
     row.appendChild(del);
 
     toggleMode();
@@ -1798,6 +1844,9 @@
     const r0 = recipeId ? recipeById(recipeId) : null;
     const isEdit = !!r0;
     const draft = r0 ? deepClone(r0) : {id: uid("rec"), category:"", name:"", inputs:[], outputs:[], isSample:false};
+    let isDirty = false;
+    const markDirty = () => { isDirty = true; };
+    modalCloseGuard = () => (!isDirty || confirm("編集中の内容が破棄されます。閉じてもよろしいですか？"));
 
     const wrap = document.createElement("div");
 
@@ -1810,6 +1859,7 @@
     cat.addEventListener("change", () => {
       draft.category = cat.value || "";
       preview.textContent = recipeLabel(draft);
+      markDirty();
     });
 
     const name = document.createElement("input");
@@ -1819,6 +1869,7 @@
     name.addEventListener("input", () => {
       draft.name = String(name.value || "");
       preview.textContent = recipeLabel(draft);
+      markDirty();
     });
 
     const col1 = document.createElement("div");
@@ -1853,7 +1904,7 @@
         inputsWrap.appendChild(p);
       }
       draft.inputs.forEach((x, i) => {
-        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO()));
+        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO(), markDirty, "input"));
       });
       const addInRow = document.createElement("div");
       addInRow.className = "row";
@@ -1862,6 +1913,7 @@
       addIn.textContent = "インプットを追加";
       addIn.addEventListener("click", () => {
         draft.inputs.push({matId:"", qty:1});
+        markDirty();
         renderIO();
       });
       addInRow.appendChild(addIn);
@@ -1877,7 +1929,7 @@
         outputsWrap.appendChild(p);
       }
       draft.outputs.forEach((x, i) => {
-        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO()));
+        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO(), markDirty, "output"));
       });
       const addOutRow = document.createElement("div");
       addOutRow.className = "row";
@@ -1886,6 +1938,7 @@
       addOut.textContent = "アウトプットを追加";
       addOut.addEventListener("click", () => {
         draft.outputs.push({matId:"", qty:1});
+        markDirty();
         renderIO();
       });
       addOutRow.appendChild(addOut);
@@ -1958,6 +2011,7 @@
       refreshAllSelects();
       renderRecipes();
       renderMaterials();
+      isDirty = false;
       closeModal();
     });
 
