@@ -265,15 +265,48 @@
       line-height:1.55;
     }
     .node{
-      border-left:2px solid var(--border);
-      padding-left:10px;
+      position:relative;
       margin:8px 0;
+    }
+    .node.root-node{margin-left:0}
+    .node-children{
+      position:relative;
+      margin:6px 0 0 18px;
+      padding-left:14px;
+    }
+    .node-children::before{
+      content:"";
+      position:absolute;
+      left:0;
+      top:0;
+      bottom:10px;
+      border-left:1px solid var(--border);
+    }
+    .node-children > .node::before{
+      content:"";
+      position:absolute;
+      left:-14px;
+      top:14px;
+      width:14px;
+      border-top:1px solid var(--border);
     }
     .node-head{
       display:flex;
       gap:8px;
       flex-wrap:wrap;
       align-items:center;
+      border-left:3px solid var(--node-accent, var(--border));
+      padding-left:8px;
+      border-radius:4px;
+    }
+    .fold-btn{
+      width:20px;
+      height:20px;
+      min-width:20px;
+      padding:0;
+      border-radius:6px;
+      font-size:11px;
+      line-height:1;
     }
     .node-head .mono{font-family:var(--mono)}
     .node-head .reason{
@@ -287,7 +320,6 @@
       border-radius:10px;
       font-size:12px;
     }
-    .node-children{margin:6px 0 0 0}
     .error{
       display:none;
       padding:10px;
@@ -599,7 +631,9 @@
   // --------------------------
   let uiTargets = [{matId:"", qty:1}];
   let uiStopNodeSet = new Set(); // 「途中停止」ノード（UIのみ）
+  let uiCollapsedNodeSet = new Set(); // ツリー折りたたみ（表示のみ）
   let lastComputeResult = null;
+  const TREE_DEFAULT_EXPAND_DEPTH = 2;
 
   // --------------------------
   // DOM
@@ -897,13 +931,44 @@
     return mat.name + " × " + fmtQtyForDisplay(qty) + " " + unitOf(mat.kind);
   }
 
+  function colorForNode(matId){
+    let h = 0;
+    const s = String(matId || "");
+    for(let i=0;i<s.length;i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    return "hsl(" + h + " 65% 55%)";
+  }
+
+  function buildDefaultCollapsedSet(root, maxDepth){
+    const out = new Set();
+    const walk = (n) => {
+      if(!n || !n.children || n.children.length === 0) return;
+      if((n.depth ?? 0) >= maxDepth && n.nodeKey) out.add(n.nodeKey);
+      for(const c of n.children) walk(c);
+    };
+    for(const c of (root.children || [])) walk(c);
+    return out;
+  }
+
   function renderTreeNode(node){
     const mat = matById(node.matId);
     const wrap = document.createElement("div");
     wrap.className = "node";
+    wrap.style.setProperty("--node-accent", colorForNode(node.matId));
 
     const head = document.createElement("div");
     head.className = "node-head";
+
+    const hasChildren = !!(node.children && node.children.length);
+    if(hasChildren && node.nodeKey){
+      const fold = document.createElement("button");
+      fold.className = "btn fold-btn";
+      fold.dataset.action = "toggleFold";
+      fold.dataset.nodeKey = node.nodeKey;
+      const isCollapsed = uiCollapsedNodeSet.has(node.nodeKey);
+      fold.textContent = isCollapsed ? "＋" : "－";
+      fold.title = isCollapsed ? "展開" : "折りたたむ";
+      head.appendChild(fold);
+    }
 
     const title = document.createElement("span");
     title.className = "mono";
@@ -982,7 +1047,7 @@
     wrap.appendChild(head);
 
     // children
-    if(node.children && node.children.length){
+    if(hasChildren && !uiCollapsedNodeSet.has(node.nodeKey)){
       const ch = document.createElement("div");
       ch.className = "node-children";
       for(const c of node.children){
@@ -1012,12 +1077,20 @@
   treeEl.addEventListener("click", (ev) => {
     const t = ev.target;
     if(!(t instanceof HTMLElement)) return;
+    if(t.dataset.action === "toggleFold"){
+      const nodeKey = t.dataset.nodeKey;
+      if(!nodeKey) return;
+      if(uiCollapsedNodeSet.has(nodeKey)) uiCollapsedNodeSet.delete(nodeKey);
+      else uiCollapsedNodeSet.add(nodeKey);
+      computeAndRender(true);
+      return;
+    }
     if(t.dataset.action === "toggleStop"){
       const nodeKey = t.dataset.nodeKey;
       if(!nodeKey) return;
       if(uiStopNodeSet.has(nodeKey)) uiStopNodeSet.delete(nodeKey);
       else uiStopNodeSet.add(nodeKey);
-      computeAndRender();
+      computeAndRender(true);
     }
   });
   treeEl.addEventListener("change", (ev) => {
@@ -1026,7 +1099,7 @@
     if(t.dataset.action === "setDefaultRecipe"){
       const matId = t.dataset.matId;
       setDefaultRecipeForOutput(matId, t.value || "");
-      computeAndRender();
+      computeAndRender(true);
     }
   });
 
@@ -1042,11 +1115,11 @@
     }
   }
 
-  function expand(matId, qty, ctx, nodeKey){
+  function expand(matId, qty, ctx, nodeKey, depth){
     const mat = matById(matId);
     if(!mat){
       // 不明素材でも止める
-      const node = {matId, qty, nodeKey, stopReason:"（素材不明のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（素材不明のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1061,6 +1134,7 @@
         matId,
         qty,
         nodeKey,
+        depth,
         stopReason:"（循環参照のため停止）",
         isCycleStop:true,
         children:[]
@@ -1079,7 +1153,7 @@
 
     // 途中停止（UI）
     if(ctx.stopNodeSet.has(nodeKey)){
-      const node = {matId, qty, nodeKey, stopReason:"（ここで停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（ここで停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1090,7 +1164,7 @@
 
     // レシピが無い => 自動原材料
     if(!r){
-      const node = {matId, qty, nodeKey, stopReason:"（原材料：レシピなし）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（原材料：レシピなし）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1098,7 +1172,7 @@
 
     const out = r.outputs.find(o => o.matId === matId);
     if(!out){
-      const node = {matId, qty, nodeKey, stopReason:"（既定レシピ不整合のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（既定レシピ不整合のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1106,7 +1180,7 @@
 
     const perRun = safeNumber(out.qty);
     if(perRun <= 0){
-      const node = {matId, qty, nodeKey, stopReason:"（アウトプット数量不正のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（アウトプット数量不正のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1123,7 +1197,8 @@
       runs,
       children: [],
       byproducts: [],
-      nodeKey
+      nodeKey,
+      depth
     };
 
     const needTotals = {};
@@ -1138,7 +1213,7 @@
     ctx.stack.push(matId);
     for(const inp of r.inputs){
       const q = safeNumber(inp.qty) * runs;
-      const child = expand(inp.matId, q, ctx, nodeKey + ".i" + node.children.length);
+      const child = expand(inp.matId, q, ctx, nodeKey + ".i" + node.children.length, depth + 1);
       node.children.push(child.node);
       mergeMap(needTotals, child.needTotals);
       mergeMap(interTotals, child.interTotals);
@@ -1178,7 +1253,7 @@
     return out;
   }
 
-  function computeAndRender(){
+  function computeAndRender(preserveTreeState=false){
     errBox.style.display = "none";
     errBox.textContent = "";
     totalsEl.innerHTML = "";
@@ -1216,7 +1291,7 @@
     let cycleStops = 0;
 
     for(const t of targets){
-      const res = expand(t.matId, t.qty, ctx, "t" + root.children.length);
+      const res = expand(t.matId, t.qty, ctx, "t" + root.children.length, 0);
       root.children.push(res.node);
       mergeMap(needTotalsAllTargets, res.needTotals);
       mergeMap(interTotalsAllTargets, res.interTotals);
@@ -1253,8 +1328,10 @@
     renderTotalsTable(byproductsEl, byprodTotalsAllTargets, "（副産物がありません）");
 
     // tree
+    if(!preserveTreeState) uiCollapsedNodeSet = buildDefaultCollapsedSet(root, TREE_DEFAULT_EXPAND_DEPTH);
+
     const rootWrap = document.createElement("div");
-    rootWrap.className = "node";
+    rootWrap.className = "node root-node";
     const h = document.createElement("div");
     h.className = "node-head";
     const t0 = document.createElement("span");
@@ -1372,6 +1449,7 @@
     }
     // UI
     uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = uiTargets.map(t => t.matId === matId ? ({...t, matId:""}) : t);
     saveState();
     refreshAllSelects();
@@ -1938,6 +2016,7 @@
 
     // UI整合
     uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = uiTargets.map(t => matById(t.matId) ? t : ({...t, matId:""}));
 
     saveState();
@@ -2002,6 +2081,7 @@
     state = deepClone(DEFAULT_STATE);
     saveState(state);
     uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = [{matId:"", qty:1}];
     lastComputeResult = null;
     refreshAllSelects();
