@@ -1726,7 +1726,6 @@
     sel.addEventListener("change", () => {
       draftArr[idx].matId = sel.value;
       unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
-      onChange();
     });
 
     const newName = document.createElement("input");
@@ -1736,7 +1735,6 @@
     newName.addEventListener("input", () => {
       draftArr[idx].newName = String(newName.value || "");
       unit.textContent = unitOf(draftArr[idx].newKind);
-      onChange();
     });
 
     const newKind = document.createElement("select");
@@ -1746,13 +1744,11 @@
     newKind.addEventListener("change", () => {
       draftArr[idx].newKind = (newKind.value === "fluid") ? "fluid" : "item";
       unit.textContent = unitOf(draftArr[idx].newKind);
-      onChange();
     });
 
     mode.addEventListener("change", () => {
       draftArr[idx].useNew = (mode.value === "new");
       toggleMode();
-      onChange();
     });
 
     const qty = document.createElement("input");
@@ -1763,7 +1759,6 @@
     qty.className = "qty";
     qty.addEventListener("input", () => {
       draftArr[idx].qty = safeNumber(qty.value);
-      onChange();
     });
 
     const unit = document.createElement("div");
