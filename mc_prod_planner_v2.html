@@ -524,12 +524,7 @@
 
       <div id="tab_chain" style="display:none;">
         <h2>レシピの連鎖入力モード</h2>
-        <div class="muted small">ある素材のレシピを入力すると、そのインプット素材のレシピ入力欄が下に連鎖表示されます（入力支援専用）。</div>
-        <div class="row">
-          <button class="btn" id="btnChainReset">連鎖入力をリセット</button>
-          <button class="btn primary" id="btnChainSave">この連鎖をレシピに保存</button>
-        </div>
-        <div id="chainTree" class="chain-tree"></div>
+        <div class="muted small">このタブを開くと、画面中央のウィンドウで連鎖入力をまとめて編集できます。</div>
       </div>
     </div>
 
@@ -730,9 +725,8 @@
   const btnImport = $("#btnImport");
   const btnClearAll = $("#btnClearAll");
 
-  const chainTreeEl = $("#chainTree");
-  const btnChainReset = $("#btnChainReset");
-  const btnChainSave = $("#btnChainSave");
+  const chainTreeEl = null; // 連鎖入力はモーダル内で描画
+  let chainModalTreeEl = null;
 
   const modalBackdrop = $("#modalBackdrop");
   const modalTitle = $("#modalTitle");
@@ -842,7 +836,7 @@
     tabChain.style.display = (name === "chain") ? "" : "none";
     if(name === "materials") renderMaterials();
     if(name === "recipes") renderRecipes();
-    if(name === "chain") renderChainMode();
+    if(name === "chain") openChainModeModal();
   }
   tabs.forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
@@ -1627,6 +1621,7 @@
     modalBackdrop.style.display = "none";
     modalBackdrop.setAttribute("aria-hidden","true");
     modalContent.innerHTML = "";
+    chainModalTreeEl = null;
     modalCloseGuard = null;
   }
   btnCloseModal.addEventListener("click", closeModal);
@@ -2444,10 +2439,38 @@
     }
   }
 
+  function openChainModeModal(){
+    ensureChainRoot();
+    const wrap = document.createElement("div");
+
+    const top = document.createElement("div");
+    top.className = "row";
+    const reset = document.createElement("button");
+    reset.className = "btn";
+    reset.textContent = "連鎖入力をリセット";
+    reset.addEventListener("click", () => { initChainMode(); renderChainMode(); });
+    const save = document.createElement("button");
+    save.className = "btn primary";
+    save.textContent = "この連鎖をレシピに保存";
+    save.addEventListener("click", saveChainRecipes);
+    top.appendChild(reset);
+    top.appendChild(save);
+
+    chainModalTreeEl = document.createElement("div");
+    chainModalTreeEl.className = "chain-tree";
+    wrap.appendChild(top);
+    wrap.appendChild(chainModalTreeEl);
+
+    openModal("連鎖入力モード", wrap);
+    renderChainMode();
+  }
+
   function renderChainMode(){
     ensureChainRoot();
-    chainTreeEl.innerHTML = "";
-    renderChainNode(chainRoot, chainTreeEl);
+    const mount = chainModalTreeEl || chainTreeEl;
+    if(!mount) return;
+    mount.innerHTML = "";
+    renderChainNode(chainRoot, mount);
   }
 
   function resolveChainMaterial(ref){
@@ -2482,12 +2505,7 @@
     for(const c of node.children) collectChainRecipes(c, out);
   }
 
-  btnChainReset.addEventListener("click", () => {
-    initChainMode();
-    renderChainMode();
-  });
-
-  btnChainSave.addEventListener("click", () => {
+  function saveChainRecipes(){
     ensureChainRoot();
     const add = [];
     collectChainRecipes(chainRoot, add);
@@ -2501,8 +2519,9 @@
     renderMaterials();
     renderRecipes();
     alert("連鎖入力から " + add.length + " 件のレシピを保存しました。");
+    closeModal();
     showTab("recipes");
-  });
+  }
 
   // --------------------------
   // 初期描画
