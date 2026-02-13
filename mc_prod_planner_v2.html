@@ -397,6 +397,11 @@
     }
     .io-input{ background:rgba(16,185,129,.08); }
     .io-output{ background:rgba(59,130,246,.08); }
+
+    .chain-tree{display:flex; flex-direction:column; gap:10px; margin-top:10px}
+    .chain-node{border:1px solid var(--border); border-radius:12px; padding:10px; background:var(--panel)}
+    .chain-node .head{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .chain-node .children{margin-left:22px; margin-top:8px; border-left:1px dashed var(--border); padding-left:10px}
     .kind-badge{
       font-size:11px;
       border:1px solid var(--border);
@@ -430,6 +435,7 @@
         <button class="tab" data-tab="materials">素材</button>
         <button class="tab" data-tab="recipes">レシピ</button>
         <button class="tab" data-tab="io">入出力</button>
+        <button class="tab" data-tab="chain">連鎖入力</button>
       </div>
 
       <div id="tab_calc">
@@ -514,6 +520,16 @@
         <div class="row">
           <button class="btn primary" id="btnImport">インポート（上書き）</button>
         </div>
+      </div>
+
+      <div id="tab_chain" style="display:none;">
+        <h2>レシピの連鎖入力モード</h2>
+        <div class="muted small">ある素材のレシピを入力すると、そのインプット素材のレシピ入力欄が下に連鎖表示されます（入力支援専用）。</div>
+        <div class="row">
+          <button class="btn" id="btnChainReset">連鎖入力をリセット</button>
+          <button class="btn primary" id="btnChainSave">この連鎖をレシピに保存</button>
+        </div>
+        <div id="chainTree" class="chain-tree"></div>
       </div>
     </div>
 
@@ -680,6 +696,7 @@
   const tabMaterials = $("#tab_materials");
   const tabRecipes = $("#tab_recipes");
   const tabIo = $("#tab_io");
+  const tabChain = $("#tab_chain");
 
   const targetsEl = $("#targets");
   const btnAddTarget = $("#btnAddTarget");
@@ -712,6 +729,10 @@
   const btnExport = $("#btnExport");
   const btnImport = $("#btnImport");
   const btnClearAll = $("#btnClearAll");
+
+  const chainTreeEl = $("#chainTree");
+  const btnChainReset = $("#btnChainReset");
+  const btnChainSave = $("#btnChainSave");
 
   const modalBackdrop = $("#modalBackdrop");
   const modalTitle = $("#modalTitle");
@@ -818,8 +839,10 @@
     tabMaterials.style.display = (name === "materials") ? "" : "none";
     tabRecipes.style.display = (name === "recipes") ? "" : "none";
     tabIo.style.display = (name === "io") ? "" : "none";
+    tabChain.style.display = (name === "chain") ? "" : "none";
     if(name === "materials") renderMaterials();
     if(name === "recipes") renderRecipes();
+    if(name === "chain") renderChainMode();
   }
   tabs.forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
@@ -2224,6 +2247,207 @@
   });
 
   // --------------------------
+  // 連鎖入力モード
+  // --------------------------
+  let chainIdSeq = 0;
+  let chainRoot = null;
+  function nextChainId(){ return "c_" + (++chainIdSeq); }
+
+  function makeChainRef(){ return {useNew:false, matId:"", newName:"", newKind:"item"}; }
+  function chainRefKind(ref){
+    if(ref.useNew) return (ref.newKind === "fluid") ? "fluid" : "item";
+    return matById(ref.matId)?.kind || "item";
+  }
+  function chainRefLabel(ref){
+    if(ref.useNew) return String(ref.newName||"").trim() || "(未入力)";
+    return matById(ref.matId)?.name || "(未選択)";
+  }
+
+  function newChainNode(depth=0){
+    return {id:nextChainId(), depth, outputQty:1, product:makeChainRef(), inputs:[], childByInputId:{}, children:[]};
+  }
+
+  function initChainMode(){
+    chainRoot = newChainNode(0);
+  }
+
+  function ensureChainRoot(){ if(!chainRoot) initChainMode(); }
+
+  function renderChainRefEditor(container, ref, onChange){
+    const mode = document.createElement("select");
+    mode.innerHTML = '<option value="existing">既存</option><option value="new">新規</option>';
+    mode.value = ref.useNew ? "new" : "existing";
+
+    const search = document.createElement("input");
+    search.type = "text"; search.className = "search"; search.placeholder = "素材検索...";
+
+    const sel = document.createElement("select");
+    const sync = () => {
+      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材)", filterText:search.value});
+      if(ref.matId && [...sel.options].some(o => o.value === ref.matId)) sel.value = ref.matId;
+    };
+    sync();
+
+    const newName = document.createElement("input");
+    newName.type = "text"; newName.placeholder = "新規素材名"; newName.value = ref.newName || "";
+
+    const newKind = document.createElement("select");
+    newKind.innerHTML = '<option value="item">アイテム</option><option value="fluid">液体</option>';
+    newKind.value = ref.newKind || "item";
+
+    function toggle(){
+      const useNew = mode.value === "new";
+      ref.useNew = useNew;
+      search.style.display = useNew ? "none" : "";
+      sel.style.display = useNew ? "none" : "";
+      newName.style.display = useNew ? "" : "none";
+      newKind.style.display = useNew ? "" : "none";
+    }
+
+    mode.addEventListener("change", () => { toggle(); onChange(); });
+    search.addEventListener("input", sync);
+    sel.addEventListener("change", () => { ref.matId = sel.value; onChange(); });
+    newName.addEventListener("input", () => { ref.newName = String(newName.value || ""); onChange(); });
+    newKind.addEventListener("change", () => { ref.newKind = newKind.value === "fluid" ? "fluid" : "item"; onChange(); });
+
+    container.appendChild(mode);
+    container.appendChild(search);
+    container.appendChild(sel);
+    container.appendChild(newName);
+    container.appendChild(newKind);
+    toggle();
+  }
+
+  function syncChainChildren(node){
+    const keep = new Set();
+    node.inputs.forEach(inp => {
+      const hasMat = inp.ref.useNew ? !!String(inp.ref.newName||"").trim() : !!inp.ref.matId;
+      if(!hasMat) return;
+      let child = node.childByInputId[inp.id];
+      if(!child){
+        child = newChainNode((node.depth||0)+1);
+        child.outputQty = chainRefKind(inp.ref) === "fluid" ? 1000 : 1;
+        node.childByInputId[inp.id] = child;
+      }
+      child.product = JSON.parse(JSON.stringify(inp.ref));
+      keep.add(child.id);
+    });
+    node.children = Object.values(node.childByInputId).filter(c => keep.has(c.id));
+    for(const k of Object.keys(node.childByInputId)){
+      if(!keep.has(node.childByInputId[k].id)) delete node.childByInputId[k];
+    }
+  }
+
+  function renderChainNode(node, mount){
+    const box = document.createElement("div"); box.className = "chain-node";
+    const head = document.createElement("div"); head.className = "head";
+    const title = document.createElement("span"); title.className = "pill";
+    title.textContent = "製造: " + chainRefLabel(node.product);
+    const outQty = document.createElement("input");
+    outQty.type = "number"; outQty.step = "0.001"; outQty.min = "0"; outQty.className = "qty";
+    outQty.value = String(node.outputQty || 1);
+    outQty.addEventListener("input", () => { node.outputQty = safeNumber(outQty.value); });
+    head.appendChild(title);
+    head.appendChild(document.createTextNode(" 1レシピ出力数:"));
+    head.appendChild(outQty);
+    box.appendChild(head);
+
+    const prodRow = document.createElement("div"); prodRow.className = "line-item io-row io-output";
+    renderChainRefEditor(prodRow, node.product, () => {
+      if(node.depth === 0 && (!node.product.useNew && !node.product.matId)) node.outputQty = 1;
+      renderChainMode();
+    });
+    box.appendChild(prodRow);
+
+    const inTitle = document.createElement("div"); inTitle.className = "muted small"; inTitle.textContent = "必要材料";
+    box.appendChild(inTitle);
+
+    for(const inp of node.inputs){
+      const row = document.createElement("div"); row.className = "line-item io-row io-input";
+      renderChainRefEditor(row, inp.ref, () => { syncChainChildren(node); renderChainMode(); });
+      const q = document.createElement("input"); q.type = "number"; q.step="0.001"; q.min="0"; q.className="qty"; q.value=String(inp.qty||1);
+      q.addEventListener("input", () => { inp.qty = safeNumber(q.value); });
+      const del = document.createElement("button"); del.className="btn"; del.textContent="削除";
+      del.addEventListener("click", () => { node.inputs = node.inputs.filter(x => x.id !== inp.id); syncChainChildren(node); renderChainMode(); });
+      row.appendChild(q); row.appendChild(del);
+      box.appendChild(row);
+    }
+
+    const addIn = document.createElement("button"); addIn.className = "btn"; addIn.textContent = "材料を追加";
+    addIn.addEventListener("click", () => { node.inputs.push({id:nextChainId(), ref:makeChainRef(), qty:1}); renderChainMode(); });
+    box.appendChild(addIn);
+
+    mount.appendChild(box);
+
+    syncChainChildren(node);
+    if(node.children.length){
+      const children = document.createElement("div"); children.className = "children";
+      for(const c of node.children) renderChainNode(c, children);
+      mount.appendChild(children);
+    }
+  }
+
+  function renderChainMode(){
+    ensureChainRoot();
+    chainTreeEl.innerHTML = "";
+    renderChainNode(chainRoot, chainTreeEl);
+  }
+
+  function resolveChainMaterial(ref){
+    if(ref.useNew){
+      const name = String(ref.newName || "").trim();
+      if(!name) return "";
+      const kind = (ref.newKind === "fluid") ? "fluid" : "item";
+      const ex = state.materials.find(m => m.name === name && m.kind === kind);
+      if(ex) return ex.id;
+      const created = {id:uid("mat"), name, kind, isSample:false};
+      state.materials.push(created);
+      return created.id;
+    }
+    return String(ref.matId || "");
+  }
+
+  function collectChainRecipes(node, out){
+    const outMatId = resolveChainMaterial(node.product);
+    if(outMatId && node.outputQty > 0 && node.inputs.length){
+      const inputs = node.inputs.map(i => ({matId: resolveChainMaterial(i.ref), qty:safeNumber(i.qty)})).filter(x => x.matId && x.qty > 0);
+      if(inputs.length){
+        out.push({
+          id: uid("rec"),
+          category: "process",
+          name: "連鎖入力: " + (matById(outMatId)?.name || outMatId),
+          inputs,
+          outputs: [{matId: outMatId, qty: safeNumber(node.outputQty)}],
+          isSample:false
+        });
+      }
+    }
+    for(const c of node.children) collectChainRecipes(c, out);
+  }
+
+  btnChainReset.addEventListener("click", () => {
+    initChainMode();
+    renderChainMode();
+  });
+
+  btnChainSave.addEventListener("click", () => {
+    ensureChainRoot();
+    const add = [];
+    collectChainRecipes(chainRoot, add);
+    if(add.length === 0){
+      alert("保存対象のレシピがありません。製造物・材料を入力してください。");
+      return;
+    }
+    state.recipes.push(...add);
+    saveState();
+    refreshAllSelects();
+    renderMaterials();
+    renderRecipes();
+    alert("連鎖入力から " + add.length + " 件のレシピを保存しました。");
+    showTab("recipes");
+  });
+
+  // --------------------------
   // 初期描画
   // --------------------------
   btnAddMat.addEventListener("click", () => openMaterialEditor(null));
@@ -2232,6 +2456,7 @@
   renderTargets();
   renderMaterials();
   renderRecipes();
+  initChainMode();
 })();
 </script>
 </body>
