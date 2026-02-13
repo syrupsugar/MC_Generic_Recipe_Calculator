@@ -633,7 +633,7 @@
   let uiStopNodeSet = new Set(); // 「途中停止」ノード（UIのみ）
   let uiCollapsedNodeSet = new Set(); // ツリー折りたたみ（表示のみ）
   let lastComputeResult = null;
-  const TREE_DEFAULT_EXPAND_DEPTH = 2;
+  const TREE_DEFAULT_EXPAND_DEPTH = 1;
 
   // --------------------------
   // DOM
@@ -1254,6 +1254,7 @@
   }
 
   function computeAndRender(preserveTreeState=false){
+    const scrollYBefore = window.scrollY;
     errBox.style.display = "none";
     errBox.textContent = "";
     totalsEl.innerHTML = "";
@@ -1349,6 +1350,10 @@
     treeEl.appendChild(rootWrap);
 
     lastComputeResult = {root, totalsToShow, byprodTotalsAllTargets, cycleStops};
+
+    requestAnimationFrame(() => {
+      window.scrollTo(0, scrollYBefore);
+    });
   }
 
   function showError(msg){
