@@ -2277,111 +2277,54 @@
     return chainRefKind(ref) === "fluid" ? "mB" : "個";
   }
 
-  function openChainEntryEditor({title, ref, qty, qtyLabel="数量", onSave}){
-    const draftRef = deepClone(ref || makeChainRef());
-    const draftQty = {value: safeNumber(qty || 0)};
-    let isDirty = false;
-
-    const wrap = document.createElement("div");
-
-    const modeRow = document.createElement("div");
-    modeRow.className = "row";
+  function renderChainRefInline(container, ref, onStructuralChange){
     const mode = document.createElement("select");
     mode.innerHTML = '<option value="existing">既存素材を選択</option><option value="new">新規素材を入力</option>';
-    mode.value = draftRef.useNew ? "new" : "existing";
-    modeRow.appendChild(mode);
+    mode.value = ref.useNew ? "new" : "existing";
 
-    const existingRow = document.createElement("div");
-    existingRow.className = "row";
     const search = document.createElement("input");
     search.type = "text";
     search.className = "search";
     search.placeholder = "素材検索...";
+
     const sel = document.createElement("select");
     const syncSel = () => {
       fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材)", filterText:search.value});
-      if(draftRef.matId && [...sel.options].some(o => o.value === draftRef.matId)) sel.value = draftRef.matId;
+      if(ref.matId && [...sel.options].some(o => o.value === ref.matId)) sel.value = ref.matId;
     };
     syncSel();
-    existingRow.appendChild(search);
-    existingRow.appendChild(sel);
 
-    const newRow = document.createElement("div");
-    newRow.className = "row";
     const newName = document.createElement("input");
     newName.type = "text";
     newName.placeholder = "新規素材名";
-    newName.value = draftRef.newName || "";
+    newName.value = ref.newName || "";
+
     const newKind = document.createElement("select");
     newKind.innerHTML = '<option value="item">アイテム（個）</option><option value="fluid">液体（mB）</option>';
-    newKind.value = draftRef.newKind || "item";
-    newRow.appendChild(newName);
-    newRow.appendChild(newKind);
-
-    const qtyRow = document.createElement("div");
-    qtyRow.className = "row";
-    const qtyInput = document.createElement("input");
-    qtyInput.type = "number";
-    qtyInput.step = "0.001";
-    qtyInput.min = "0";
-    qtyInput.className = "qty";
-    qtyInput.value = String(draftQty.value || 0);
-    const qtyUnit = document.createElement("span");
-    qtyUnit.className = "pill";
+    newKind.value = ref.newKind || "item";
 
     function refreshVisible(){
       const useNew = mode.value === "new";
-      draftRef.useNew = useNew;
-      existingRow.style.display = useNew ? "none" : "";
-      newRow.style.display = useNew ? "" : "none";
-      qtyUnit.textContent = qtyLabel + "単位: " + chainRefUnit(draftRef);
+      ref.useNew = useNew;
+      search.style.display = useNew ? "none" : "";
+      sel.style.display = useNew ? "none" : "";
+      newName.style.display = useNew ? "" : "none";
+      newKind.style.display = useNew ? "" : "none";
     }
 
-    mode.addEventListener("change", () => { isDirty = true; refreshVisible(); });
+    mode.addEventListener("change", () => { refreshVisible(); onStructuralChange?.(); });
     search.addEventListener("input", syncSel);
-    sel.addEventListener("change", () => { draftRef.matId = sel.value; isDirty = true; });
-    newName.addEventListener("input", () => { draftRef.newName = String(newName.value || ""); isDirty = true; });
-    newKind.addEventListener("change", () => { draftRef.newKind = newKind.value === "fluid" ? "fluid" : "item"; isDirty = true; refreshVisible(); });
-    qtyInput.addEventListener("input", () => { draftQty.value = safeNumber(qtyInput.value); isDirty = true; });
+    sel.addEventListener("change", () => { ref.matId = sel.value; onStructuralChange?.(); });
+    newName.addEventListener("input", () => { ref.newName = String(newName.value || ""); });
+    newName.addEventListener("change", () => { ref.newName = String(newName.value || ""); onStructuralChange?.(); });
+    newKind.addEventListener("change", () => { ref.newKind = newKind.value === "fluid" ? "fluid" : "item"; onStructuralChange?.(); });
 
-    qtyRow.appendChild(qtyInput);
-    qtyRow.appendChild(qtyUnit);
-
-    const buttons = document.createElement("div");
-    buttons.className = "row";
-    const save = document.createElement("button");
-    save.className = "btn primary";
-    save.textContent = "反映";
-    const cancel = document.createElement("button");
-    cancel.className = "btn";
-    cancel.textContent = "キャンセル";
-    buttons.appendChild(save);
-    buttons.appendChild(cancel);
-
-    save.addEventListener("click", () => {
-      const hasMat = draftRef.useNew ? !!String(draftRef.newName || "").trim() : !!String(draftRef.matId || "");
-      if(!hasMat){
-        alert("素材を入力してください。");
-        return;
-      }
-      if(draftQty.value <= 0){
-        alert("数量は0より大きい値を入力してください。");
-        return;
-      }
-      onSave?.({ref:draftRef, qty:draftQty.value});
-      closeModal();
-    });
-    cancel.addEventListener("click", closeModal);
-
-    wrap.appendChild(modeRow);
-    wrap.appendChild(existingRow);
-    wrap.appendChild(newRow);
-    wrap.appendChild(qtyRow);
-    wrap.appendChild(buttons);
-
-    modalCloseGuard = () => (!isDirty || confirm("編集中の内容が破棄されます。閉じてもよろしいですか？"));
+    container.appendChild(mode);
+    container.appendChild(search);
+    container.appendChild(sel);
+    container.appendChild(newName);
+    container.appendChild(newKind);
     refreshVisible();
-    openModal(title, wrap);
   }
 
   function chainSentence(node){
@@ -2421,26 +2364,26 @@
     sentence.textContent = chainSentence(node);
     box.appendChild(sentence);
 
-    const actions = document.createElement("div");
-    actions.className = "row";
-    const editProduct = document.createElement("button");
-    editProduct.className = "btn";
-    editProduct.textContent = "製造物を入力";
-    editProduct.addEventListener("click", () => {
-      openChainEntryEditor({
-        title: "製造物を入力",
-        ref: node.product,
-        qty: node.outputQty,
-        qtyLabel: "1レシピ出力",
-        onSave: ({ref, qty}) => {
-          node.product = deepClone(ref);
-          node.outputQty = qty;
-          renderChainMode();
-        }
-      });
-    });
-    actions.appendChild(editProduct);
-    box.appendChild(actions);
+    const productRow = document.createElement("div");
+    productRow.className = "line-item io-row io-output";
+    const productLabel = document.createElement("div");
+    productLabel.className = "small muted";
+    productLabel.textContent = "製造物（1レシピ出力）";
+    const outQty = document.createElement("input");
+    outQty.type = "number";
+    outQty.step = "0.001";
+    outQty.min = "0";
+    outQty.className = "qty";
+    outQty.value = String(node.outputQty || 1);
+    const outUnit = document.createElement("span");
+    outUnit.className = "pill";
+    outUnit.textContent = chainRefUnit(node.product);
+    renderChainRefInline(productRow, node.product, () => { syncChainChildren(node); renderChainMode(); });
+    outQty.addEventListener("input", () => { node.outputQty = safeNumber(outQty.value); });
+    productRow.appendChild(productLabel);
+    productRow.appendChild(outQty);
+    productRow.appendChild(outUnit);
+    box.appendChild(productRow);
 
     const inTitle = document.createElement("div");
     inTitle.className = "muted small";
@@ -2450,26 +2393,22 @@
     for(const inp of node.inputs){
       const row = document.createElement("div");
       row.className = "line-item io-row io-input";
-      const txt = document.createElement("div");
-      txt.style.flex = "1";
-      txt.textContent = chainInputSentence(inp);
-      const edit = document.createElement("button");
-      edit.className = "btn";
-      edit.textContent = "入力";
-      edit.addEventListener("click", () => {
-        openChainEntryEditor({
-          title: "必要材料を入力",
-          ref: inp.ref,
-          qty: inp.qty,
-          qtyLabel: "必要数",
-          onSave: ({ref, qty}) => {
-            inp.ref = deepClone(ref);
-            inp.qty = qty;
-            syncChainChildren(node);
-            renderChainMode();
-          }
-        });
-      });
+      const lbl = document.createElement("div");
+      lbl.className = "small muted";
+      lbl.textContent = "必要数";
+      const qty = document.createElement("input");
+      qty.type = "number";
+      qty.step = "0.001";
+      qty.min = "0";
+      qty.className = "qty";
+      qty.value = String(inp.qty || 1);
+      const unit = document.createElement("span");
+      unit.className = "pill";
+      unit.textContent = chainRefUnit(inp.ref);
+      const refWrap = document.createElement("div");
+      refWrap.style.display = "contents";
+      renderChainRefInline(refWrap, inp.ref, () => { syncChainChildren(node); renderChainMode(); });
+      qty.addEventListener("input", () => { inp.qty = safeNumber(qty.value); });
       const del = document.createElement("button");
       del.className = "btn";
       del.textContent = "削除";
@@ -2478,8 +2417,10 @@
         syncChainChildren(node);
         renderChainMode();
       });
-      row.appendChild(txt);
-      row.appendChild(edit);
+      row.appendChild(lbl);
+      row.appendChild(refWrap);
+      row.appendChild(qty);
+      row.appendChild(unit);
       row.appendChild(del);
       box.appendChild(row);
     }
@@ -2488,17 +2429,8 @@
     addIn.className = "btn";
     addIn.textContent = "必要材料を追加";
     addIn.addEventListener("click", () => {
-      openChainEntryEditor({
-        title: "必要材料を追加",
-        ref: makeChainRef(),
-        qty: 1,
-        qtyLabel: "必要数",
-        onSave: ({ref, qty}) => {
-          node.inputs.push({id:nextChainId(), ref:deepClone(ref), qty});
-          syncChainChildren(node);
-          renderChainMode();
-        }
-      });
+      node.inputs.push({id:nextChainId(), ref:makeChainRef(), qty:1});
+      renderChainMode();
     });
     box.appendChild(addIn);
 
