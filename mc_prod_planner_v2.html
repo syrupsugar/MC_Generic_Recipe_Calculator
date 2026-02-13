@@ -308,6 +308,15 @@
       font-size:11px;
       line-height:1;
     }
+    .stop-btn{
+      width:20px;
+      height:20px;
+      min-width:20px;
+      padding:0;
+      border-radius:6px;
+      font-size:12px;
+      line-height:1;
+    }
     .node-head .mono{font-family:var(--mono)}
     .node-head .reason{
       color:var(--warn);
@@ -988,10 +997,12 @@
     const canToggleStop = !!mat && !!node.nodeKey && outputsOfRecipeForMat(mat.id).length > 0 && !node.isCycleStop;
     if(canToggleStop){
       const btn = document.createElement("button");
-      btn.className = "btn";
+      btn.className = "btn stop-btn";
       btn.dataset.action = "toggleStop";
       btn.dataset.nodeKey = node.nodeKey;
-      btn.textContent = uiStopNodeSet.has(node.nodeKey) ? "停止解除" : "ここで停止";
+      const isStoppedHere = uiStopNodeSet.has(node.nodeKey);
+      btn.textContent = isStoppedHere ? "↺" : "×";
+      btn.title = isStoppedHere ? "停止解除" : "ここで停止";
       head.appendChild(btn);
     }
 
