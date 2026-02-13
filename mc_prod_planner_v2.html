@@ -1696,7 +1696,7 @@
     openModal(isEdit ? "素材を編集" : "素材を追加", wrap);
   }
 
-  function makeMatRow(draftArr, idx, onChange){
+  function makeMatRow(draftArr, idx, onChange, onCreateMaterial){
     const row = document.createElement("div");
     row.className = "line-item";
 
@@ -1735,6 +1735,20 @@
     unit.className = "unit";
     unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
 
+    const create = document.createElement("button");
+    create.className = "btn";
+    create.textContent = "新規素材";
+    create.addEventListener("click", () => {
+      if(typeof onCreateMaterial !== "function") return;
+      const newMatId = onCreateMaterial();
+      if(!newMatId) return;
+      draftArr[idx].matId = newMatId;
+      syncRecipeMatSelect();
+      sel.value = newMatId;
+      unit.textContent = unitOf(matById(newMatId)?.kind);
+      onChange();
+    });
+
     const del = document.createElement("button");
     del.className = "btn";
     del.textContent = "削除";
@@ -1747,6 +1761,7 @@
     row.appendChild(sel);
     row.appendChild(qty);
     row.appendChild(unit);
+    row.appendChild(create);
     row.appendChild(del);
     return row;
   }
@@ -1797,6 +1812,22 @@
     const inputsWrap = document.createElement("div");
     const outputsWrap = document.createElement("div");
 
+    function createMaterialQuick(){
+      const name = String(prompt("新規素材名を入力してください。") || "").trim();
+      if(!name) return "";
+      if(state.materials.some(m => m.name === name)){
+        alert("同名の素材が既にあります。");
+        return "";
+      }
+      const isFluid = confirm("液体素材として登録しますか？\n[OK]=液体(mB) / [キャンセル]=アイテム(個)");
+      const mat = {id: uid("mat"), name, kind: isFluid ? "fluid" : "item", isSample:false};
+      state.materials.push(mat);
+      saveState();
+      refreshAllSelects();
+      renderMaterials();
+      return mat.id;
+    }
+
     function renderIO(){
       inputsWrap.innerHTML = "";
       outputsWrap.innerHTML = "";
@@ -1811,7 +1842,7 @@
         inputsWrap.appendChild(p);
       }
       draft.inputs.forEach((x, i) => {
-        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO()));
+        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO(), createMaterialQuick));
       });
       const addInRow = document.createElement("div");
       addInRow.className = "row";
@@ -1822,18 +1853,6 @@
         draft.inputs.push({matId:"", qty:1});
         renderIO();
       });
-      const quickMat = document.createElement("button");
-      quickMat.className = "btn";
-      quickMat.textContent = "素材を追加して戻る";
-      quickMat.addEventListener("click", () => {
-        // 現在のdraftを一旦保持して、素材追加後に同モーダルを開き直す
-        closeModal();
-        openMaterialEditor(null);
-        // 素材追加後に戻る導線は複雑になるので、ここでは単純に素材追加を促す
-        alert("素材を追加したら、もう一度レシピ編集を開いてください。");
-      });
-      addInRow.appendChild(addIn);
-      addInRow.appendChild(quickMat);
       inputsWrap.appendChild(addInRow);
 
       const hOut = document.createElement("h3"); hOut.textContent = "アウトプット";
@@ -1846,7 +1865,7 @@
         outputsWrap.appendChild(p);
       }
       draft.outputs.forEach((x, i) => {
-        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO()));
+        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO(), createMaterialQuick));
       });
       const addOutRow = document.createElement("div");
       addOutRow.className = "row";
