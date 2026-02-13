@@ -1696,9 +1696,18 @@
     openModal(isEdit ? "素材を編集" : "素材を追加", wrap);
   }
 
-  function makeMatRow(draftArr, idx, onChange, onCreateMaterial){
+  function makeMatRow(draftArr, idx, onChange){
     const row = document.createElement("div");
     row.className = "line-item";
+
+    draftArr[idx].useNew = !!draftArr[idx].useNew;
+    draftArr[idx].newName = String(draftArr[idx].newName || "");
+    draftArr[idx].newKind = (draftArr[idx].newKind === "fluid") ? "fluid" : "item";
+
+    const mode = document.createElement("select");
+    mode.style.flex = "0 0 130px";
+    mode.innerHTML = '<option value="existing">既存を選択</option><option value="new">新規入力</option>';
+    mode.value = draftArr[idx].useNew ? "new" : "existing";
 
     const search = document.createElement("input");
     search.type = "text";
@@ -1720,6 +1729,32 @@
       onChange();
     });
 
+    const newName = document.createElement("input");
+    newName.type = "text";
+    newName.placeholder = "新規素材名";
+    newName.value = draftArr[idx].newName || "";
+    newName.addEventListener("input", () => {
+      draftArr[idx].newName = String(newName.value || "");
+      unit.textContent = unitOf(draftArr[idx].newKind);
+      onChange();
+    });
+
+    const newKind = document.createElement("select");
+    newKind.style.flex = "0 0 120px";
+    newKind.innerHTML = '<option value="item">アイテム</option><option value="fluid">液体</option>';
+    newKind.value = draftArr[idx].newKind;
+    newKind.addEventListener("change", () => {
+      draftArr[idx].newKind = (newKind.value === "fluid") ? "fluid" : "item";
+      unit.textContent = unitOf(draftArr[idx].newKind);
+      onChange();
+    });
+
+    mode.addEventListener("change", () => {
+      draftArr[idx].useNew = (mode.value === "new");
+      toggleMode();
+      onChange();
+    });
+
     const qty = document.createElement("input");
     qty.type = "number";
     qty.min = "0";
@@ -1733,21 +1768,15 @@
 
     const unit = document.createElement("div");
     unit.className = "unit";
-    unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
 
-    const create = document.createElement("button");
-    create.className = "btn";
-    create.textContent = "新規素材";
-    create.addEventListener("click", () => {
-      if(typeof onCreateMaterial !== "function") return;
-      const newMatId = onCreateMaterial();
-      if(!newMatId) return;
-      draftArr[idx].matId = newMatId;
-      syncRecipeMatSelect();
-      sel.value = newMatId;
-      unit.textContent = unitOf(matById(newMatId)?.kind);
-      onChange();
-    });
+    function toggleMode(){
+      const useNew = !!draftArr[idx].useNew;
+      search.style.display = useNew ? "none" : "";
+      sel.style.display = useNew ? "none" : "";
+      newName.style.display = useNew ? "" : "none";
+      newKind.style.display = useNew ? "" : "none";
+      unit.textContent = useNew ? unitOf(draftArr[idx].newKind) : (sel.value ? unitOf(matById(sel.value)?.kind) : "");
+    }
 
     const del = document.createElement("button");
     del.className = "btn";
@@ -1757,12 +1786,16 @@
       onChange(true);
     });
 
+    row.appendChild(mode);
     row.appendChild(search);
     row.appendChild(sel);
+    row.appendChild(newName);
+    row.appendChild(newKind);
     row.appendChild(qty);
     row.appendChild(unit);
-    row.appendChild(create);
     row.appendChild(del);
+
+    toggleMode();
     return row;
   }
 
@@ -1811,23 +1844,6 @@
 
     const inputsWrap = document.createElement("div");
     const outputsWrap = document.createElement("div");
-
-    function createMaterialQuick(){
-      const name = String(prompt("新規素材名を入力してください。") || "").trim();
-      if(!name) return "";
-      if(state.materials.some(m => m.name === name)){
-        alert("同名の素材が既にあります。");
-        return "";
-      }
-      const isFluid = confirm("液体素材として登録しますか？\n[OK]=液体(mB) / [キャンセル]=アイテム(個)");
-      const mat = {id: uid("mat"), name, kind: isFluid ? "fluid" : "item", isSample:false};
-      state.materials.push(mat);
-      saveState();
-      refreshAllSelects();
-      renderMaterials();
-      return mat.id;
-    }
-
     function renderIO(){
       inputsWrap.innerHTML = "";
       outputsWrap.innerHTML = "";
@@ -1842,7 +1858,7 @@
         inputsWrap.appendChild(p);
       }
       draft.inputs.forEach((x, i) => {
-        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO(), createMaterialQuick));
+        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO()));
       });
       const addInRow = document.createElement("div");
       addInRow.className = "row";
@@ -1865,7 +1881,7 @@
         outputsWrap.appendChild(p);
       }
       draft.outputs.forEach((x, i) => {
-        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO(), createMaterialQuick));
+        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO()));
       });
       const addOutRow = document.createElement("div");
       addOutRow.className = "row";
@@ -1894,8 +1910,36 @@
       // sanitize
       draft.name = String(draft.name||"").trim();
       draft.category = (draft.category === "process" || draft.category === "other") ? draft.category : "";
-      draft.inputs = (draft.inputs||[]).map(x => ({matId:x.matId, qty:safeNumber(x.qty)})).filter(x => x.matId && x.qty>0 && matById(x.matId));
-      draft.outputs = (draft.outputs||[]).map(x => ({matId:x.matId, qty:safeNumber(x.qty)})).filter(x => x.matId && x.qty>0 && matById(x.matId));
+
+      const resolveRowMaterialId = (x) => {
+        if(x.useNew){
+          const nm = String(x.newName || "").trim();
+          if(!nm) return "";
+          const nk = (x.newKind === "fluid") ? "fluid" : "item";
+          const existing = state.materials.find(m => m.name === nm);
+          if(existing){
+            if(existing.kind !== nk){
+              alert("素材「" + nm + "」は既に別単位で登録されています。既存素材を選ぶか、別名で登録してください。");
+              return "";
+            }
+            return existing.id;
+          }
+          const mat = {id: uid("mat"), name:nm, kind:nk, isSample:false};
+          state.materials.push(mat);
+          return mat.id;
+        }
+        return String(x.matId || "");
+      };
+
+      draft.inputs = (draft.inputs||[]).map(x => ({
+        matId: resolveRowMaterialId(x),
+        qty: safeNumber(x.qty)
+      })).filter(x => x.matId && x.qty>0 && matById(x.matId));
+
+      draft.outputs = (draft.outputs||[]).map(x => ({
+        matId: resolveRowMaterialId(x),
+        qty: safeNumber(x.qty)
+      })).filter(x => x.matId && x.qty>0 && matById(x.matId));
 
       if(draft.outputs.length === 0){
         alert("アウトプットを1つ以上設定してください。");
