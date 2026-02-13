@@ -930,8 +930,8 @@
       head.appendChild(btn);
     }
 
-    // 既定レシピ選択
-    if(node.recipeMatId && mat){
+    // 既定レシピ選択（未指定時でも再選択できるよう常時表示）
+    if(mat){
       const candidates = outputsOfRecipeForMat(mat.id);
       if(candidates.length > 1){
         const sel = document.createElement("select");
