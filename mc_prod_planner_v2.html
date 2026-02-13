@@ -340,6 +340,7 @@
       flex-wrap:wrap;
     }
     .line-item .qty{width:140px}
+    .line-item .search{width:220px; min-width:180px}
     .line-item select{flex:1; min-width:240px}
     .line-item .unit{min-width:46px; text-align:left; color:var(--muted); font-size:12px}
     .line-item .btn{padding:7px 9px}
@@ -385,17 +386,8 @@
 
         <div class="hr"></div>
 
-        <h3>途中で分解を止める素材（UIのみ・保存しません）</h3>
-        <div class="row">
-          <div>
-            <label>素材</label><br/>
-            <select id="stopMat"></select>
-          </div>
-          <div style="flex:0 0 auto; min-width:auto; padding-top:18px;">
-            <button class="btn" id="btnAddStop">追加</button>
-          </div>
-        </div>
-        <div id="stopChips" class="row" style="margin-top:0;"></div>
+        <h3>途中停止（UIのみ・保存しません）</h3>
+        <div class="muted small">分解停止は「ツリー展開」の各ノードで個別に切り替えます。</div>
 
         <div class="hr"></div>
 
@@ -606,7 +598,7 @@
   // UI-only（保存しない）
   // --------------------------
   let uiTargets = [{matId:"", qty:1}];
-  let uiStopSet = new Set();   // 「途中停止」素材（UIのみ）
+  let uiStopNodeSet = new Set(); // 「途中停止」ノード（UIのみ）
   let lastComputeResult = null;
 
   // --------------------------
@@ -626,10 +618,6 @@
 
   const targetsEl = $("#targets");
   const btnAddTarget = $("#btnAddTarget");
-  const stopMatEl = $("#stopMat");
-  const btnAddStop = $("#btnAddStop");
-  const stopChipsEl = $("#stopChips");
-
   const optCeilRuns = $("#optCeilRuns");
   const optRoundNeed = $("#optRoundNeed");
   const optNetByprod = $("#optNetByprod");
@@ -772,7 +760,7 @@
   // --------------------------
   // セレクト更新
   // --------------------------
-  function fillMaterialSelect(sel, {includeEmpty=true, emptyLabel="(選択)"} = {}){
+  function fillMaterialSelect(sel, {includeEmpty=true, emptyLabel="(選択)", filterText=""} = {}){
     const cur = sel.value;
     sel.innerHTML = "";
     if(includeEmpty){
@@ -781,7 +769,10 @@
       o.textContent = emptyLabel;
       sel.appendChild(o);
     }
-    const mats = [...state.materials].sort((a,b) => a.name.localeCompare(b.name,"ja"));
+    const q = String(filterText || "").trim().toLowerCase();
+    const mats = [...state.materials]
+      .filter(m => !q || matLabel(m).toLowerCase().includes(q))
+      .sort((a,b) => a.name.localeCompare(b.name,"ja"));
     for(const m of mats){
       const o = document.createElement("option");
       o.value = m.id;
@@ -802,9 +793,19 @@
       const wrap = document.createElement("div");
       wrap.className = "line-item";
 
+      const search = document.createElement("input");
+      search.type = "text";
+      search.className = "search";
+      search.placeholder = "素材を検索...";
+
       const sel = document.createElement("select");
-      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(最終製品を選択)"});
+      const syncTargetSelect = () => {
+        fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(最終製品を選択)", filterText:search.value});
+        if(t.matId && [...sel.options].some(o => o.value === t.matId)) sel.value = t.matId;
+      };
+      syncTargetSelect();
       sel.value = t.matId || "";
+      search.addEventListener("input", syncTargetSelect);
       sel.addEventListener("change", () => {
         uiTargets[idx].matId = sel.value;
       });
@@ -837,6 +838,7 @@
         renderTargets();
       });
 
+      wrap.appendChild(search);
       wrap.appendChild(sel);
       wrap.appendChild(qty);
       wrap.appendChild(unit);
@@ -848,51 +850,6 @@
   btnAddTarget.addEventListener("click", () => {
     uiTargets.push({matId:"", qty:1});
     renderTargets();
-  });
-
-  // --------------------------
-  // 計算UI：途中停止
-  // --------------------------
-  function renderStopSelect(){
-    fillMaterialSelect(stopMatEl, {includeEmpty:true, emptyLabel:"(素材を選択)"});
-  }
-  function renderStopChips(){
-    stopChipsEl.innerHTML = "";
-    if(uiStopSet.size === 0){
-      const d = document.createElement("div");
-      d.className = "muted small";
-      d.textContent = "設定されていません。";
-      stopChipsEl.appendChild(d);
-      return;
-    }
-    const mats = [...uiStopSet].map(id => matById(id)).filter(Boolean).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
-    for(const m of mats){
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = matLabel(m);
-
-      const x = document.createElement("button");
-      x.type = "button";
-      x.textContent = "×";
-      x.title = "削除";
-      x.addEventListener("click", () => {
-        uiStopSet.delete(m.id);
-        renderStopChips();
-        // 表示中なら再計算して反映
-        if(lastComputeResult) computeAndRender();
-      });
-      chip.appendChild(x);
-      stopChipsEl.appendChild(chip);
-    }
-  }
-
-  btnAddStop.addEventListener("click", () => {
-    const id = stopMatEl.value;
-    if(!id) return;
-    uiStopSet.add(id);
-    stopMatEl.value = "";
-    renderStopChips();
-    if(lastComputeResult) computeAndRender();
   });
 
   // --------------------------
@@ -963,13 +920,13 @@
     }
 
     // ここで停止 / 解除（UIのみ）
-    const canToggleStop = !!mat && outputsOfRecipeForMat(mat.id).length > 0 && !node.isCycleStop;
+    const canToggleStop = !!mat && !!node.nodeKey && outputsOfRecipeForMat(mat.id).length > 0 && !node.isCycleStop;
     if(canToggleStop){
       const btn = document.createElement("button");
       btn.className = "btn";
       btn.dataset.action = "toggleStop";
-      btn.dataset.matId = mat.id;
-      btn.textContent = uiStopSet.has(mat.id) ? "停止解除" : "ここで停止";
+      btn.dataset.nodeKey = node.nodeKey;
+      btn.textContent = uiStopNodeSet.has(node.nodeKey) ? "停止解除" : "ここで停止";
       head.appendChild(btn);
     }
 
@@ -1056,11 +1013,10 @@
     const t = ev.target;
     if(!(t instanceof HTMLElement)) return;
     if(t.dataset.action === "toggleStop"){
-      const id = t.dataset.matId;
-      if(!id) return;
-      if(uiStopSet.has(id)) uiStopSet.delete(id);
-      else uiStopSet.add(id);
-      renderStopChips();
+      const nodeKey = t.dataset.nodeKey;
+      if(!nodeKey) return;
+      if(uiStopNodeSet.has(nodeKey)) uiStopNodeSet.delete(nodeKey);
+      else uiStopNodeSet.add(nodeKey);
       computeAndRender();
     }
   });
@@ -1086,11 +1042,11 @@
     }
   }
 
-  function expand(matId, qty, ctx){
+  function expand(matId, qty, ctx, nodeKey){
     const mat = matById(matId);
     if(!mat){
       // 不明素材でも止める
-      const node = {matId, qty, stopReason:"（素材不明のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, stopReason:"（素材不明のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1104,6 +1060,7 @@
       const node = {
         matId,
         qty,
+        nodeKey,
         stopReason:"（循環参照のため停止）",
         isCycleStop:true,
         children:[]
@@ -1121,8 +1078,8 @@
     }
 
     // 途中停止（UI）
-    if(ctx.stopSet.has(matId)){
-      const node = {matId, qty, stopReason:"（ここで停止）", children:[]};
+    if(ctx.stopNodeSet.has(nodeKey)){
+      const node = {matId, qty, nodeKey, stopReason:"（ここで停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1133,7 +1090,7 @@
 
     // レシピが無い => 自動原材料
     if(!r){
-      const node = {matId, qty, stopReason:"（原材料：レシピなし）", children:[]};
+      const node = {matId, qty, nodeKey, stopReason:"（原材料：レシピなし）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1141,7 +1098,7 @@
 
     const out = r.outputs.find(o => o.matId === matId);
     if(!out){
-      const node = {matId, qty, stopReason:"（既定レシピ不整合のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, stopReason:"（既定レシピ不整合のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1149,7 +1106,7 @@
 
     const perRun = safeNumber(out.qty);
     if(perRun <= 0){
-      const node = {matId, qty, stopReason:"（アウトプット数量不正のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, stopReason:"（アウトプット数量不正のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1165,7 +1122,8 @@
       recipeMatId: matId,
       runs,
       children: [],
-      byproducts: []
+      byproducts: [],
+      nodeKey
     };
 
     const needTotals = {};
@@ -1180,7 +1138,7 @@
     ctx.stack.push(matId);
     for(const inp of r.inputs){
       const q = safeNumber(inp.qty) * runs;
-      const child = expand(inp.matId, q, ctx);
+      const child = expand(inp.matId, q, ctx, nodeKey + ".i" + node.children.length);
       node.children.push(child.node);
       mergeMap(needTotals, child.needTotals);
       mergeMap(interTotals, child.interTotals);
@@ -1246,7 +1204,7 @@
 
     const ctx = {
       opts,
-      stopSet: uiStopSet,
+      stopNodeSet: uiStopNodeSet,
       stack: [],
       cycleShown: new Set()
     };
@@ -1258,7 +1216,7 @@
     let cycleStops = 0;
 
     for(const t of targets){
-      const res = expand(t.matId, t.qty, ctx);
+      const res = expand(t.matId, t.qty, ctx, "t" + root.children.length);
       root.children.push(res.node);
       mergeMap(needTotalsAllTargets, res.needTotals);
       mergeMap(interTotalsAllTargets, res.interTotals);
@@ -1413,14 +1371,13 @@
       if(!recipeById(rid)) delete state.selectedRecipeByOutput[k];
     }
     // UI
-    uiStopSet.delete(matId);
+    uiStopNodeSet = new Set();
     uiTargets = uiTargets.map(t => t.matId === matId ? ({...t, matId:""}) : t);
     saveState();
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
     renderTargets();
-    renderStopChips();
   }
 
   // --------------------------
@@ -1627,7 +1584,6 @@
       renderMaterials();
       renderRecipes();
       renderTargets();
-      renderStopSelect();
       closeModal();
     });
 
@@ -1650,9 +1606,20 @@
     const row = document.createElement("div");
     row.className = "line-item";
 
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "search";
+    search.placeholder = "素材を検索...";
+
     const sel = document.createElement("select");
-    fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材を選択)"});
+    const syncRecipeMatSelect = () => {
+      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材を選択)", filterText:search.value});
+      const cur = draftArr[idx].matId || "";
+      if(cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+    };
+    syncRecipeMatSelect();
     sel.value = draftArr[idx].matId || "";
+    search.addEventListener("input", syncRecipeMatSelect);
     sel.addEventListener("change", () => {
       draftArr[idx].matId = sel.value;
       unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
@@ -1682,6 +1649,7 @@
       onChange(true);
     });
 
+    row.appendChild(search);
     row.appendChild(sel);
     row.appendChild(qty);
     row.appendChild(unit);
@@ -1863,7 +1831,6 @@
   // 全体のセレクト類更新
   // --------------------------
   function refreshAllSelects(){
-    renderStopSelect();
     renderTargets();
   }
 
@@ -1970,14 +1937,13 @@
     }
 
     // UI整合
-    uiStopSet = new Set([...uiStopSet].filter(id => !!matById(id)));
+    uiStopNodeSet = new Set();
     uiTargets = uiTargets.map(t => matById(t.matId) ? t : ({...t, matId:""}));
 
     saveState();
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
-    renderStopChips();
     alert("サンプルデータを削除しました。");
   }
 
@@ -2025,7 +1991,6 @@
       refreshAllSelects();
       renderMaterials();
       renderRecipes();
-      renderStopChips();
       alert("インポートしました。");
     }catch(e){
       alert("インポートに失敗しました: " + (e?.message || e));
@@ -2036,13 +2001,12 @@
     if(!confirm("全データを消去します。よろしいですか？")) return;
     state = deepClone(DEFAULT_STATE);
     saveState(state);
-    uiStopSet = new Set();
+    uiStopNodeSet = new Set();
     uiTargets = [{matId:"", qty:1}];
     lastComputeResult = null;
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
-    renderStopChips();
     totalsEl.innerHTML = "";
     byproductsEl.innerHTML = "";
     treeEl.innerHTML = "";
@@ -2056,10 +2020,7 @@
   btnAddMat.addEventListener("click", () => openMaterialEditor(null));
   btnAddRecipe.addEventListener("click", () => openRecipeEditor(null));
 
-  fillMaterialSelect(stopMatEl, {includeEmpty:true, emptyLabel:"(素材を選択)"});
   renderTargets();
-  renderStopSelect();
-  renderStopChips();
   renderMaterials();
   renderRecipes();
 })();
