@@ -558,6 +558,16 @@
 
       <div class="hr"></div>
 
+      <h3>特定アイテム流量</h3>
+      <div class="muted small">選択した素材について、今回の計算で必要となる合計流量を表示します。</div>
+      <div class="row">
+        <input id="flowSearch" class="search" type="text" placeholder="素材を検索..." />
+        <select id="flowMaterialSelect"></select>
+      </div>
+      <div id="flowResult" class="pill">（未計算）</div>
+
+      <div class="hr"></div>
+
       <h3>ツリー展開</h3>
       <div class="muted small" style="margin-bottom:8px;">
         ツリー中の「ここで停止」は、この計算画面の間だけ有効です（保存しません）。
@@ -672,6 +682,7 @@
   // UI-only（保存しない）
   // --------------------------
   let uiTargets = [{matId:"", qty:1}];
+  let uiFlowMatId = "";
   let uiStopNodeSet = new Set(); // 「途中停止」ノード（UIのみ）
   let uiCollapsedNodeSet = new Set(); // ツリー折りたたみ（表示のみ）
   let lastComputeResult = null;
@@ -712,6 +723,9 @@
   const kpiCycles = $("#kpiCycles");
   const totalsEl = $("#totals");
   const byproductsEl = $("#byproducts");
+  const flowSearchEl = $("#flowSearch");
+  const flowMaterialSelectEl = $("#flowMaterialSelect");
+  const flowResultEl = $("#flowResult");
   const treeEl = $("#tree");
 
   const matList = $("#matList");
@@ -865,6 +879,32 @@
     if([...sel.options].some(o => o.value === cur)) sel.value = cur;
   }
 
+  function renderFlowSelector(){
+    if(!flowMaterialSelectEl) return;
+    fillMaterialSelect(flowMaterialSelectEl, {includeEmpty:true, emptyLabel:"(流量を確認する素材)", filterText: flowSearchEl ? flowSearchEl.value : ""});
+    if(uiFlowMatId && [...flowMaterialSelectEl.options].some(o => o.value === uiFlowMatId)){
+      flowMaterialSelectEl.value = uiFlowMatId;
+    }else if(![...flowMaterialSelectEl.options].some(o => o.value === uiFlowMatId)){
+      uiFlowMatId = "";
+      flowMaterialSelectEl.value = "";
+    }
+  }
+
+  function renderFlowResult(){
+    if(!flowResultEl) return;
+    if(!lastComputeResult){
+      flowResultEl.textContent = "（未計算）";
+      return;
+    }
+    const mat = matById(uiFlowMatId);
+    if(!mat){
+      flowResultEl.textContent = "素材を選択してください。";
+      return;
+    }
+    const q = safeNumber(lastComputeResult.flowTotals?.[uiFlowMatId] || 0);
+    flowResultEl.textContent = "合計流量: " + fmtQtyForDisplay(q) + " " + unitOf(mat.kind) + " / " + mat.name;
+  }
+
   // --------------------------
   // 計算UI：最終製品複数
   // --------------------------
@@ -934,6 +974,18 @@
     uiTargets.push({matId:"", qty:1});
     renderTargets();
   });
+
+  if(flowSearchEl){
+    flowSearchEl.addEventListener("input", () => {
+      renderFlowSelector();
+    });
+  }
+  if(flowMaterialSelectEl){
+    flowMaterialSelectEl.addEventListener("change", () => {
+      uiFlowMatId = flowMaterialSelectEl.value;
+      renderFlowResult();
+    });
+  }
 
   // --------------------------
   // 結果表示（テーブル）
@@ -1320,6 +1372,8 @@
 
     if(targets.length === 0){
       showError("最終製品を1つ以上選び、数量を0より大きい値で入力してください。");
+      lastComputeResult = null;
+      renderFlowResult();
       return;
     }
 
@@ -1354,12 +1408,11 @@
     // 相殺
     const needAfterNet = opts.netByproducts ? netByproducts(needTotalsAllTargets, byprodTotalsAllTargets) : needTotalsAllTargets;
 
+    // 特定素材流量（中間素材を含む総流量）
+    const flowTotals = opts.netByproducts ? netByproducts(interTotalsAllTargets, byprodTotalsAllTargets) : interTotalsAllTargets;
+
     // 表示する総計を選択
-    const totalsToShow = opts.includeIntermediateInTotals ? (() => {
-      // 中間素材総計（interTotals）から、副産物相殺を同様に適用
-      const interAfter = opts.netByproducts ? netByproducts(interTotalsAllTargets, byprodTotalsAllTargets) : interTotalsAllTargets;
-      return interAfter;
-    })() : needAfterNet;
+    const totalsToShow = opts.includeIntermediateInTotals ? flowTotals : needAfterNet;
 
     // KPI
     const baseCount = Object.keys(needAfterNet).filter(id => matById(id)).length;
@@ -1400,7 +1453,8 @@
     rootWrap.appendChild(ch);
     treeEl.appendChild(rootWrap);
 
-    lastComputeResult = {root, totalsToShow, byprodTotalsAllTargets, cycleStops};
+    lastComputeResult = {root, totalsToShow, byprodTotalsAllTargets, flowTotals, cycleStops};
+    renderFlowResult();
 
     requestAnimationFrame(() => {
       window.scrollTo(0, scrollYBefore);
@@ -2057,6 +2111,7 @@
   // --------------------------
   function refreshAllSelects(){
     renderTargets();
+    renderFlowSelector();
   }
 
   // --------------------------
@@ -2239,6 +2294,7 @@
     treeEl.innerHTML = "";
     kpis.style.display = "none";
     errBox.style.display = "none";
+    renderFlowResult();
   });
 
   // --------------------------
@@ -2530,6 +2586,8 @@
   btnAddRecipe.addEventListener("click", () => openRecipeEditor(null));
 
   renderTargets();
+  renderFlowSelector();
+  renderFlowResult();
   renderMaterials();
   renderRecipes();
   initChainMode();
