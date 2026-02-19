@@ -265,15 +265,57 @@
       line-height:1.55;
     }
     .node{
-      border-left:2px solid var(--border);
-      padding-left:10px;
+      position:relative;
       margin:8px 0;
+    }
+    .node.root-node{margin-left:0}
+    .node-children{
+      position:relative;
+      margin:6px 0 0 18px;
+      padding-left:14px;
+    }
+    .node-children::before{
+      content:"";
+      position:absolute;
+      left:0;
+      top:0;
+      bottom:10px;
+      border-left:1px solid var(--border);
+    }
+    .node-children > .node::before{
+      content:"";
+      position:absolute;
+      left:-14px;
+      top:14px;
+      width:14px;
+      border-top:1px solid var(--border);
     }
     .node-head{
       display:flex;
       gap:8px;
       flex-wrap:wrap;
       align-items:center;
+      border-left:3px solid var(--node-accent, var(--border));
+      padding-left:8px;
+      border-radius:4px;
+    }
+    .fold-btn{
+      width:20px;
+      height:20px;
+      min-width:20px;
+      padding:0;
+      border-radius:6px;
+      font-size:11px;
+      line-height:1;
+    }
+    .stop-btn{
+      width:20px;
+      height:20px;
+      min-width:20px;
+      padding:0;
+      border-radius:6px;
+      font-size:12px;
+      line-height:1;
     }
     .node-head .mono{font-family:var(--mono)}
     .node-head .reason{
@@ -287,7 +329,6 @@
       border-radius:10px;
       font-size:12px;
     }
-    .node-children{margin:6px 0 0 0}
     .error{
       display:none;
       padding:10px;
@@ -325,7 +366,12 @@
       gap:10px;
     }
     .modal-title h2{margin:0}
-    .modal-content{margin-top:10px}
+    .modal-content{
+      margin-top:10px;
+      max-height:70vh;
+      overflow:auto;
+      padding-right:4px;
+    }
     .two-col{
       display:grid;
       grid-template-columns: 1fr 1fr;
@@ -340,9 +386,32 @@
       flex-wrap:wrap;
     }
     .line-item .qty{width:140px}
+    .line-item .search{width:220px; min-width:180px}
     .line-item select{flex:1; min-width:240px}
     .line-item .unit{min-width:46px; text-align:left; color:var(--muted); font-size:12px}
     .line-item .btn{padding:7px 9px}
+    .io-row{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:8px;
+    }
+    .io-input{ background:rgba(16,185,129,.08); }
+    .io-output{ background:rgba(59,130,246,.08); }
+
+    .chain-tree{display:flex; flex-direction:column; gap:10px; margin-top:10px}
+    .chain-node{border:1px solid var(--border); border-radius:12px; padding:10px; background:var(--panel)}
+    .chain-node .head{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .chain-node .children{margin-left:22px; margin-top:8px; border-left:1px dashed var(--border); padding-left:10px}
+    .kind-badge{
+      font-size:11px;
+      border:1px solid var(--border);
+      border-radius:999px;
+      padding:2px 8px;
+      color:var(--muted);
+      background:var(--panel);
+      min-width:56px;
+      text-align:center;
+    }
   </style>
 </head>
 <body>
@@ -366,6 +435,7 @@
         <button class="tab" data-tab="materials">素材</button>
         <button class="tab" data-tab="recipes">レシピ</button>
         <button class="tab" data-tab="io">入出力</button>
+        <button class="tab" data-tab="chain">連鎖入力</button>
       </div>
 
       <div id="tab_calc">
@@ -385,17 +455,8 @@
 
         <div class="hr"></div>
 
-        <h3>途中で分解を止める素材（UIのみ・保存しません）</h3>
-        <div class="row">
-          <div>
-            <label>素材</label><br/>
-            <select id="stopMat"></select>
-          </div>
-          <div style="flex:0 0 auto; min-width:auto; padding-top:18px;">
-            <button class="btn" id="btnAddStop">追加</button>
-          </div>
-        </div>
-        <div id="stopChips" class="row" style="margin-top:0;"></div>
+        <h3>途中停止（UIのみ・保存しません）</h3>
+        <div class="muted small">分解停止は「ツリー展開」の各ノードで個別に切り替えます。</div>
 
         <div class="hr"></div>
 
@@ -460,6 +521,11 @@
           <button class="btn primary" id="btnImport">インポート（上書き）</button>
         </div>
       </div>
+
+      <div id="tab_chain" style="display:none;">
+        <h2>レシピの連鎖入力モード</h2>
+        <div class="muted small">このタブを開くと、画面中央のウィンドウで連鎖入力をまとめて編集できます。</div>
+      </div>
     </div>
 
     <div class="card">
@@ -489,6 +555,16 @@
 
       <h3>副産物（相殺前の合計）</h3>
       <div id="byproducts"></div>
+
+      <div class="hr"></div>
+
+      <h3>特定アイテム流量</h3>
+      <div class="muted small">選択した素材について、今回の計算で必要となる合計流量を表示します。</div>
+      <div class="row">
+        <input id="flowSearch" class="search" type="text" placeholder="素材を検索..." />
+        <select id="flowMaterialSelect"></select>
+      </div>
+      <div id="flowResult" class="pill">（未計算）</div>
 
       <div class="hr"></div>
 
@@ -606,8 +682,11 @@
   // UI-only（保存しない）
   // --------------------------
   let uiTargets = [{matId:"", qty:1}];
-  let uiStopSet = new Set();   // 「途中停止」素材（UIのみ）
+  let uiFlowMatId = "";
+  let uiStopNodeSet = new Set(); // 「途中停止」ノード（UIのみ）
+  let uiCollapsedNodeSet = new Set(); // ツリー折りたたみ（表示のみ）
   let lastComputeResult = null;
+  const TREE_DEFAULT_EXPAND_DEPTH = 1;
 
   // --------------------------
   // DOM
@@ -623,13 +702,10 @@
   const tabMaterials = $("#tab_materials");
   const tabRecipes = $("#tab_recipes");
   const tabIo = $("#tab_io");
+  const tabChain = $("#tab_chain");
 
   const targetsEl = $("#targets");
   const btnAddTarget = $("#btnAddTarget");
-  const stopMatEl = $("#stopMat");
-  const btnAddStop = $("#btnAddStop");
-  const stopChipsEl = $("#stopChips");
-
   const optCeilRuns = $("#optCeilRuns");
   const optRoundNeed = $("#optRoundNeed");
   const optNetByprod = $("#optNetByprod");
@@ -647,6 +723,9 @@
   const kpiCycles = $("#kpiCycles");
   const totalsEl = $("#totals");
   const byproductsEl = $("#byproducts");
+  const flowSearchEl = $("#flowSearch");
+  const flowMaterialSelectEl = $("#flowMaterialSelect");
+  const flowResultEl = $("#flowResult");
   const treeEl = $("#tree");
 
   const matList = $("#matList");
@@ -660,10 +739,14 @@
   const btnImport = $("#btnImport");
   const btnClearAll = $("#btnClearAll");
 
+  const chainTreeEl = null; // 連鎖入力はモーダル内で描画
+  let chainModalTreeEl = null;
+
   const modalBackdrop = $("#modalBackdrop");
   const modalTitle = $("#modalTitle");
   const modalContent = $("#modalContent");
   const btnCloseModal = $("#btnCloseModal");
+  let modalCloseGuard = null;
 
   // --------------------------
   // テーマ
@@ -764,15 +847,17 @@
     tabMaterials.style.display = (name === "materials") ? "" : "none";
     tabRecipes.style.display = (name === "recipes") ? "" : "none";
     tabIo.style.display = (name === "io") ? "" : "none";
+    tabChain.style.display = (name === "chain") ? "" : "none";
     if(name === "materials") renderMaterials();
     if(name === "recipes") renderRecipes();
+    if(name === "chain") openChainModeModal();
   }
   tabs.forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
   // --------------------------
   // セレクト更新
   // --------------------------
-  function fillMaterialSelect(sel, {includeEmpty=true, emptyLabel="(選択)"} = {}){
+  function fillMaterialSelect(sel, {includeEmpty=true, emptyLabel="(選択)", filterText=""} = {}){
     const cur = sel.value;
     sel.innerHTML = "";
     if(includeEmpty){
@@ -781,7 +866,10 @@
       o.textContent = emptyLabel;
       sel.appendChild(o);
     }
-    const mats = [...state.materials].sort((a,b) => a.name.localeCompare(b.name,"ja"));
+    const q = String(filterText || "").trim().toLowerCase();
+    const mats = [...state.materials]
+      .filter(m => !q || matLabel(m).toLowerCase().includes(q))
+      .sort((a,b) => a.name.localeCompare(b.name,"ja"));
     for(const m of mats){
       const o = document.createElement("option");
       o.value = m.id;
@@ -789,6 +877,32 @@
       sel.appendChild(o);
     }
     if([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+
+  function renderFlowSelector(){
+    if(!flowMaterialSelectEl) return;
+    fillMaterialSelect(flowMaterialSelectEl, {includeEmpty:true, emptyLabel:"(流量を確認する素材)", filterText: flowSearchEl ? flowSearchEl.value : ""});
+    if(uiFlowMatId && [...flowMaterialSelectEl.options].some(o => o.value === uiFlowMatId)){
+      flowMaterialSelectEl.value = uiFlowMatId;
+    }else if(![...flowMaterialSelectEl.options].some(o => o.value === uiFlowMatId)){
+      uiFlowMatId = "";
+      flowMaterialSelectEl.value = "";
+    }
+  }
+
+  function renderFlowResult(){
+    if(!flowResultEl) return;
+    if(!lastComputeResult){
+      flowResultEl.textContent = "（未計算）";
+      return;
+    }
+    const mat = matById(uiFlowMatId);
+    if(!mat){
+      flowResultEl.textContent = "素材を選択してください。";
+      return;
+    }
+    const q = safeNumber(lastComputeResult.flowTotals?.[uiFlowMatId] || 0);
+    flowResultEl.textContent = "合計流量: " + fmtQtyForDisplay(q) + " " + unitOf(mat.kind) + " / " + mat.name;
   }
 
   // --------------------------
@@ -802,9 +916,19 @@
       const wrap = document.createElement("div");
       wrap.className = "line-item";
 
+      const search = document.createElement("input");
+      search.type = "text";
+      search.className = "search";
+      search.placeholder = "素材を検索...";
+
       const sel = document.createElement("select");
-      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(最終製品を選択)"});
+      const syncTargetSelect = () => {
+        fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(最終製品を選択)", filterText:search.value});
+        if(t.matId && [...sel.options].some(o => o.value === t.matId)) sel.value = t.matId;
+      };
+      syncTargetSelect();
       sel.value = t.matId || "";
+      search.addEventListener("input", syncTargetSelect);
       sel.addEventListener("change", () => {
         uiTargets[idx].matId = sel.value;
       });
@@ -837,6 +961,7 @@
         renderTargets();
       });
 
+      wrap.appendChild(search);
       wrap.appendChild(sel);
       wrap.appendChild(qty);
       wrap.appendChild(unit);
@@ -850,50 +975,17 @@
     renderTargets();
   });
 
-  // --------------------------
-  // 計算UI：途中停止
-  // --------------------------
-  function renderStopSelect(){
-    fillMaterialSelect(stopMatEl, {includeEmpty:true, emptyLabel:"(素材を選択)"});
+  if(flowSearchEl){
+    flowSearchEl.addEventListener("input", () => {
+      renderFlowSelector();
+    });
   }
-  function renderStopChips(){
-    stopChipsEl.innerHTML = "";
-    if(uiStopSet.size === 0){
-      const d = document.createElement("div");
-      d.className = "muted small";
-      d.textContent = "設定されていません。";
-      stopChipsEl.appendChild(d);
-      return;
-    }
-    const mats = [...uiStopSet].map(id => matById(id)).filter(Boolean).sort((a,b)=>a.name.localeCompare(b.name,"ja"));
-    for(const m of mats){
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = matLabel(m);
-
-      const x = document.createElement("button");
-      x.type = "button";
-      x.textContent = "×";
-      x.title = "削除";
-      x.addEventListener("click", () => {
-        uiStopSet.delete(m.id);
-        renderStopChips();
-        // 表示中なら再計算して反映
-        if(lastComputeResult) computeAndRender();
-      });
-      chip.appendChild(x);
-      stopChipsEl.appendChild(chip);
-    }
+  if(flowMaterialSelectEl){
+    flowMaterialSelectEl.addEventListener("change", () => {
+      uiFlowMatId = flowMaterialSelectEl.value;
+      renderFlowResult();
+    });
   }
-
-  btnAddStop.addEventListener("click", () => {
-    const id = stopMatEl.value;
-    if(!id) return;
-    uiStopSet.add(id);
-    stopMatEl.value = "";
-    renderStopChips();
-    if(lastComputeResult) computeAndRender();
-  });
 
   // --------------------------
   // 結果表示（テーブル）
@@ -940,13 +1032,44 @@
     return mat.name + " × " + fmtQtyForDisplay(qty) + " " + unitOf(mat.kind);
   }
 
+  function colorForNode(matId){
+    let h = 0;
+    const s = String(matId || "");
+    for(let i=0;i<s.length;i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    return "hsl(" + h + " 65% 55%)";
+  }
+
+  function buildDefaultCollapsedSet(root, maxDepth){
+    const out = new Set();
+    const walk = (n) => {
+      if(!n || !n.children || n.children.length === 0) return;
+      if((n.depth ?? 0) >= maxDepth && n.nodeKey) out.add(n.nodeKey);
+      for(const c of n.children) walk(c);
+    };
+    for(const c of (root.children || [])) walk(c);
+    return out;
+  }
+
   function renderTreeNode(node){
     const mat = matById(node.matId);
     const wrap = document.createElement("div");
     wrap.className = "node";
+    wrap.style.setProperty("--node-accent", colorForNode(node.matId));
 
     const head = document.createElement("div");
     head.className = "node-head";
+
+    const hasChildren = !!(node.children && node.children.length);
+    if(hasChildren && node.nodeKey){
+      const fold = document.createElement("button");
+      fold.className = "btn fold-btn";
+      fold.dataset.action = "toggleFold";
+      fold.dataset.nodeKey = node.nodeKey;
+      const isCollapsed = uiCollapsedNodeSet.has(node.nodeKey);
+      fold.textContent = isCollapsed ? "＋" : "－";
+      fold.title = isCollapsed ? "展開" : "折りたたむ";
+      head.appendChild(fold);
+    }
 
     const title = document.createElement("span");
     title.className = "mono";
@@ -963,18 +1086,20 @@
     }
 
     // ここで停止 / 解除（UIのみ）
-    const canToggleStop = !!mat && outputsOfRecipeForMat(mat.id).length > 0 && !node.isCycleStop;
+    const canToggleStop = !!mat && !!node.nodeKey && outputsOfRecipeForMat(mat.id).length > 0 && !node.isCycleStop;
     if(canToggleStop){
       const btn = document.createElement("button");
-      btn.className = "btn";
+      btn.className = "btn stop-btn";
       btn.dataset.action = "toggleStop";
-      btn.dataset.matId = mat.id;
-      btn.textContent = uiStopSet.has(mat.id) ? "停止解除" : "ここで停止";
+      btn.dataset.nodeKey = node.nodeKey;
+      const isStoppedHere = uiStopNodeSet.has(node.nodeKey);
+      btn.textContent = isStoppedHere ? "↺" : "×";
+      btn.title = isStoppedHere ? "停止解除" : "ここで停止";
       head.appendChild(btn);
     }
 
-    // 既定レシピ選択
-    if(node.recipeMatId && mat){
+    // 既定レシピ選択（未指定時でも再選択できるよう常時表示）
+    if(mat){
       const candidates = outputsOfRecipeForMat(mat.id);
       if(candidates.length > 1){
         const sel = document.createElement("select");
@@ -1025,7 +1150,7 @@
     wrap.appendChild(head);
 
     // children
-    if(node.children && node.children.length){
+    if(hasChildren && !uiCollapsedNodeSet.has(node.nodeKey)){
       const ch = document.createElement("div");
       ch.className = "node-children";
       for(const c of node.children){
@@ -1055,13 +1180,20 @@
   treeEl.addEventListener("click", (ev) => {
     const t = ev.target;
     if(!(t instanceof HTMLElement)) return;
+    if(t.dataset.action === "toggleFold"){
+      const nodeKey = t.dataset.nodeKey;
+      if(!nodeKey) return;
+      if(uiCollapsedNodeSet.has(nodeKey)) uiCollapsedNodeSet.delete(nodeKey);
+      else uiCollapsedNodeSet.add(nodeKey);
+      computeAndRender(true);
+      return;
+    }
     if(t.dataset.action === "toggleStop"){
-      const id = t.dataset.matId;
-      if(!id) return;
-      if(uiStopSet.has(id)) uiStopSet.delete(id);
-      else uiStopSet.add(id);
-      renderStopChips();
-      computeAndRender();
+      const nodeKey = t.dataset.nodeKey;
+      if(!nodeKey) return;
+      if(uiStopNodeSet.has(nodeKey)) uiStopNodeSet.delete(nodeKey);
+      else uiStopNodeSet.add(nodeKey);
+      computeAndRender(true);
     }
   });
   treeEl.addEventListener("change", (ev) => {
@@ -1070,7 +1202,7 @@
     if(t.dataset.action === "setDefaultRecipe"){
       const matId = t.dataset.matId;
       setDefaultRecipeForOutput(matId, t.value || "");
-      computeAndRender();
+      computeAndRender(true);
     }
   });
 
@@ -1086,11 +1218,11 @@
     }
   }
 
-  function expand(matId, qty, ctx){
+  function expand(matId, qty, ctx, nodeKey, depth){
     const mat = matById(matId);
     if(!mat){
       // 不明素材でも止める
-      const node = {matId, qty, stopReason:"（素材不明のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（素材不明のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1104,6 +1236,8 @@
       const node = {
         matId,
         qty,
+        nodeKey,
+        depth,
         stopReason:"（循環参照のため停止）",
         isCycleStop:true,
         children:[]
@@ -1121,8 +1255,8 @@
     }
 
     // 途中停止（UI）
-    if(ctx.stopSet.has(matId)){
-      const node = {matId, qty, stopReason:"（ここで停止）", children:[]};
+    if(ctx.stopNodeSet.has(nodeKey)){
+      const node = {matId, qty, nodeKey, depth, stopReason:"（ここで停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1133,7 +1267,7 @@
 
     // レシピが無い => 自動原材料
     if(!r){
-      const node = {matId, qty, stopReason:"（原材料：レシピなし）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（原材料：レシピなし）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1141,7 +1275,7 @@
 
     const out = r.outputs.find(o => o.matId === matId);
     if(!out){
-      const node = {matId, qty, stopReason:"（既定レシピ不整合のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（既定レシピ不整合のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1149,7 +1283,7 @@
 
     const perRun = safeNumber(out.qty);
     if(perRun <= 0){
-      const node = {matId, qty, stopReason:"（アウトプット数量不正のため停止）", children:[]};
+      const node = {matId, qty, nodeKey, depth, stopReason:"（アウトプット数量不正のため停止）", children:[]};
       const need = {}; addToMap(need, matId, qty);
       const inter = {}; addToMap(inter, matId, qty);
       return {node, needTotals:need, interTotals:inter, byproductTotals:{}, cycleStops:0};
@@ -1165,7 +1299,9 @@
       recipeMatId: matId,
       runs,
       children: [],
-      byproducts: []
+      byproducts: [],
+      nodeKey,
+      depth
     };
 
     const needTotals = {};
@@ -1180,7 +1316,7 @@
     ctx.stack.push(matId);
     for(const inp of r.inputs){
       const q = safeNumber(inp.qty) * runs;
-      const child = expand(inp.matId, q, ctx);
+      const child = expand(inp.matId, q, ctx, nodeKey + ".i" + node.children.length, depth + 1);
       node.children.push(child.node);
       mergeMap(needTotals, child.needTotals);
       mergeMap(interTotals, child.interTotals);
@@ -1220,7 +1356,8 @@
     return out;
   }
 
-  function computeAndRender(){
+  function computeAndRender(preserveTreeState=false){
+    const scrollYBefore = window.scrollY;
     errBox.style.display = "none";
     errBox.textContent = "";
     totalsEl.innerHTML = "";
@@ -1235,6 +1372,8 @@
 
     if(targets.length === 0){
       showError("最終製品を1つ以上選び、数量を0より大きい値で入力してください。");
+      lastComputeResult = null;
+      renderFlowResult();
       return;
     }
 
@@ -1246,7 +1385,7 @@
 
     const ctx = {
       opts,
-      stopSet: uiStopSet,
+      stopNodeSet: uiStopNodeSet,
       stack: [],
       cycleShown: new Set()
     };
@@ -1258,7 +1397,7 @@
     let cycleStops = 0;
 
     for(const t of targets){
-      const res = expand(t.matId, t.qty, ctx);
+      const res = expand(t.matId, t.qty, ctx, "t" + root.children.length, 0);
       root.children.push(res.node);
       mergeMap(needTotalsAllTargets, res.needTotals);
       mergeMap(interTotalsAllTargets, res.interTotals);
@@ -1269,12 +1408,11 @@
     // 相殺
     const needAfterNet = opts.netByproducts ? netByproducts(needTotalsAllTargets, byprodTotalsAllTargets) : needTotalsAllTargets;
 
+    // 特定素材流量（中間素材を含む総流量）
+    const flowTotals = opts.netByproducts ? netByproducts(interTotalsAllTargets, byprodTotalsAllTargets) : interTotalsAllTargets;
+
     // 表示する総計を選択
-    const totalsToShow = opts.includeIntermediateInTotals ? (() => {
-      // 中間素材総計（interTotals）から、副産物相殺を同様に適用
-      const interAfter = opts.netByproducts ? netByproducts(interTotalsAllTargets, byprodTotalsAllTargets) : interTotalsAllTargets;
-      return interAfter;
-    })() : needAfterNet;
+    const totalsToShow = opts.includeIntermediateInTotals ? flowTotals : needAfterNet;
 
     // KPI
     const baseCount = Object.keys(needAfterNet).filter(id => matById(id)).length;
@@ -1295,8 +1433,10 @@
     renderTotalsTable(byproductsEl, byprodTotalsAllTargets, "（副産物がありません）");
 
     // tree
+    if(!preserveTreeState) uiCollapsedNodeSet = buildDefaultCollapsedSet(root, TREE_DEFAULT_EXPAND_DEPTH);
+
     const rootWrap = document.createElement("div");
-    rootWrap.className = "node";
+    rootWrap.className = "node root-node";
     const h = document.createElement("div");
     h.className = "node-head";
     const t0 = document.createElement("span");
@@ -1313,7 +1453,12 @@
     rootWrap.appendChild(ch);
     treeEl.appendChild(rootWrap);
 
-    lastComputeResult = {root, totalsToShow, byprodTotalsAllTargets, cycleStops};
+    lastComputeResult = {root, totalsToShow, byprodTotalsAllTargets, flowTotals, cycleStops};
+    renderFlowResult();
+
+    requestAnimationFrame(() => {
+      window.scrollTo(0, scrollYBefore);
+    });
   }
 
   function showError(msg){
@@ -1413,14 +1558,14 @@
       if(!recipeById(rid)) delete state.selectedRecipeByOutput[k];
     }
     // UI
-    uiStopSet.delete(matId);
+    uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = uiTargets.map(t => t.matId === matId ? ({...t, matId:""}) : t);
     saveState();
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
     renderTargets();
-    renderStopChips();
   }
 
   // --------------------------
@@ -1526,9 +1671,12 @@
     modalBackdrop.setAttribute("aria-hidden","false");
   }
   function closeModal(){
+    if(modalCloseGuard && !modalCloseGuard()) return;
     modalBackdrop.style.display = "none";
     modalBackdrop.setAttribute("aria-hidden","true");
     modalContent.innerHTML = "";
+    chainModalTreeEl = null;
+    modalCloseGuard = null;
   }
   btnCloseModal.addEventListener("click", closeModal);
   modalBackdrop.addEventListener("click", (e) => {
@@ -1627,7 +1775,6 @@
       renderMaterials();
       renderRecipes();
       renderTargets();
-      renderStopSelect();
       closeModal();
     });
 
@@ -1646,17 +1793,68 @@
     openModal(isEdit ? "素材を編集" : "素材を追加", wrap);
   }
 
-  function makeMatRow(draftArr, idx, onChange){
+  function makeMatRow(draftArr, idx, onChange, onDirty, rowRole){
     const row = document.createElement("div");
     row.className = "line-item";
+    row.classList.add("io-row", rowRole === "output" ? "io-output" : "io-input");
+
+    draftArr[idx].useNew = !!draftArr[idx].useNew;
+    draftArr[idx].newName = String(draftArr[idx].newName || "");
+    draftArr[idx].newKind = (draftArr[idx].newKind === "fluid") ? "fluid" : "item";
+
+    const mode = document.createElement("select");
+    mode.style.flex = "0 0 130px";
+    mode.innerHTML = '<option value="existing">既存を選択</option><option value="new">新規入力</option>';
+    mode.value = draftArr[idx].useNew ? "new" : "existing";
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "search";
+    search.placeholder = "素材を検索...";
 
     const sel = document.createElement("select");
-    fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材を選択)"});
+    const syncRecipeMatSelect = () => {
+      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材を選択)", filterText:search.value});
+      const cur = draftArr[idx].matId || "";
+      if(cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+    };
+    syncRecipeMatSelect();
     sel.value = draftArr[idx].matId || "";
+    search.addEventListener("input", syncRecipeMatSelect);
     sel.addEventListener("change", () => {
       draftArr[idx].matId = sel.value;
       unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
-      onChange();
+      updateKindBadge();
+      if(onDirty) onDirty();
+    });
+
+    const newName = document.createElement("input");
+    newName.type = "text";
+    newName.placeholder = "新規素材名";
+    newName.value = draftArr[idx].newName || "";
+    newName.addEventListener("input", () => {
+      draftArr[idx].newName = String(newName.value || "");
+      unit.textContent = unitOf(draftArr[idx].newKind);
+      updateKindBadge();
+      if(onDirty) onDirty();
+    });
+
+    const newKind = document.createElement("select");
+    newKind.style.flex = "0 0 120px";
+    newKind.innerHTML = '<option value="item">アイテム</option><option value="fluid">液体</option>';
+    newKind.value = draftArr[idx].newKind;
+    newKind.addEventListener("change", () => {
+      draftArr[idx].newKind = (newKind.value === "fluid") ? "fluid" : "item";
+      unit.textContent = unitOf(draftArr[idx].newKind);
+      updateKindBadge();
+      if(onDirty) onDirty();
+    });
+
+    mode.addEventListener("change", () => {
+      draftArr[idx].useNew = (mode.value === "new");
+      toggleMode();
+      updateKindBadge();
+      if(onDirty) onDirty();
     });
 
     const qty = document.createElement("input");
@@ -1667,25 +1865,50 @@
     qty.className = "qty";
     qty.addEventListener("input", () => {
       draftArr[idx].qty = safeNumber(qty.value);
-      onChange();
+      if(onDirty) onDirty();
     });
 
     const unit = document.createElement("div");
     unit.className = "unit";
-    unit.textContent = sel.value ? unitOf(matById(sel.value)?.kind) : "";
+
+    const kindBadge = document.createElement("span");
+    kindBadge.className = "kind-badge";
+
+    function updateKindBadge(){
+      const k = (!!draftArr[idx].useNew) ? draftArr[idx].newKind : (matById(sel.value)?.kind || "item");
+      kindBadge.textContent = (k === "fluid") ? "液体" : "アイテム";
+    }
+
+    function toggleMode(){
+      const useNew = !!draftArr[idx].useNew;
+      search.style.display = useNew ? "none" : "";
+      sel.style.display = useNew ? "none" : "";
+      newName.style.display = useNew ? "" : "none";
+      newKind.style.display = useNew ? "" : "none";
+      unit.textContent = useNew ? unitOf(draftArr[idx].newKind) : (sel.value ? unitOf(matById(sel.value)?.kind) : "");
+      updateKindBadge();
+    }
 
     const del = document.createElement("button");
     del.className = "btn";
     del.textContent = "削除";
     del.addEventListener("click", () => {
       draftArr.splice(idx, 1);
+      if(onDirty) onDirty();
       onChange(true);
     });
 
+    row.appendChild(mode);
+    row.appendChild(search);
     row.appendChild(sel);
+    row.appendChild(newName);
+    row.appendChild(newKind);
     row.appendChild(qty);
     row.appendChild(unit);
+    row.appendChild(kindBadge);
     row.appendChild(del);
+
+    toggleMode();
     return row;
   }
 
@@ -1693,6 +1916,9 @@
     const r0 = recipeId ? recipeById(recipeId) : null;
     const isEdit = !!r0;
     const draft = r0 ? deepClone(r0) : {id: uid("rec"), category:"", name:"", inputs:[], outputs:[], isSample:false};
+    let isDirty = false;
+    const markDirty = () => { isDirty = true; };
+    modalCloseGuard = () => (!isDirty || confirm("編集中の内容が破棄されます。閉じてもよろしいですか？"));
 
     const wrap = document.createElement("div");
 
@@ -1705,6 +1931,7 @@
     cat.addEventListener("change", () => {
       draft.category = cat.value || "";
       preview.textContent = recipeLabel(draft);
+      markDirty();
     });
 
     const name = document.createElement("input");
@@ -1714,6 +1941,7 @@
     name.addEventListener("input", () => {
       draft.name = String(name.value || "");
       preview.textContent = recipeLabel(draft);
+      markDirty();
     });
 
     const col1 = document.createElement("div");
@@ -1734,7 +1962,6 @@
 
     const inputsWrap = document.createElement("div");
     const outputsWrap = document.createElement("div");
-
     function renderIO(){
       inputsWrap.innerHTML = "";
       outputsWrap.innerHTML = "";
@@ -1749,7 +1976,7 @@
         inputsWrap.appendChild(p);
       }
       draft.inputs.forEach((x, i) => {
-        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO()));
+        inputsWrap.appendChild(makeMatRow(draft.inputs, i, () => renderIO(), markDirty, "input"));
       });
       const addInRow = document.createElement("div");
       addInRow.className = "row";
@@ -1758,20 +1985,10 @@
       addIn.textContent = "インプットを追加";
       addIn.addEventListener("click", () => {
         draft.inputs.push({matId:"", qty:1});
+        markDirty();
         renderIO();
       });
-      const quickMat = document.createElement("button");
-      quickMat.className = "btn";
-      quickMat.textContent = "素材を追加して戻る";
-      quickMat.addEventListener("click", () => {
-        // 現在のdraftを一旦保持して、素材追加後に同モーダルを開き直す
-        closeModal();
-        openMaterialEditor(null);
-        // 素材追加後に戻る導線は複雑になるので、ここでは単純に素材追加を促す
-        alert("素材を追加したら、もう一度レシピ編集を開いてください。");
-      });
       addInRow.appendChild(addIn);
-      addInRow.appendChild(quickMat);
       inputsWrap.appendChild(addInRow);
 
       const hOut = document.createElement("h3"); hOut.textContent = "アウトプット";
@@ -1784,7 +2001,7 @@
         outputsWrap.appendChild(p);
       }
       draft.outputs.forEach((x, i) => {
-        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO()));
+        outputsWrap.appendChild(makeMatRow(draft.outputs, i, () => renderIO(), markDirty, "output"));
       });
       const addOutRow = document.createElement("div");
       addOutRow.className = "row";
@@ -1793,6 +2010,7 @@
       addOut.textContent = "アウトプットを追加";
       addOut.addEventListener("click", () => {
         draft.outputs.push({matId:"", qty:1});
+        markDirty();
         renderIO();
       });
       addOutRow.appendChild(addOut);
@@ -1813,8 +2031,36 @@
       // sanitize
       draft.name = String(draft.name||"").trim();
       draft.category = (draft.category === "process" || draft.category === "other") ? draft.category : "";
-      draft.inputs = (draft.inputs||[]).map(x => ({matId:x.matId, qty:safeNumber(x.qty)})).filter(x => x.matId && x.qty>0 && matById(x.matId));
-      draft.outputs = (draft.outputs||[]).map(x => ({matId:x.matId, qty:safeNumber(x.qty)})).filter(x => x.matId && x.qty>0 && matById(x.matId));
+
+      const resolveRowMaterialId = (x) => {
+        if(x.useNew){
+          const nm = String(x.newName || "").trim();
+          if(!nm) return "";
+          const nk = (x.newKind === "fluid") ? "fluid" : "item";
+          const existing = state.materials.find(m => m.name === nm);
+          if(existing){
+            if(existing.kind !== nk){
+              alert("素材「" + nm + "」は既に別単位で登録されています。既存素材を選ぶか、別名で登録してください。");
+              return "";
+            }
+            return existing.id;
+          }
+          const mat = {id: uid("mat"), name:nm, kind:nk, isSample:false};
+          state.materials.push(mat);
+          return mat.id;
+        }
+        return String(x.matId || "");
+      };
+
+      draft.inputs = (draft.inputs||[]).map(x => ({
+        matId: resolveRowMaterialId(x),
+        qty: safeNumber(x.qty)
+      })).filter(x => x.matId && x.qty>0 && matById(x.matId));
+
+      draft.outputs = (draft.outputs||[]).map(x => ({
+        matId: resolveRowMaterialId(x),
+        qty: safeNumber(x.qty)
+      })).filter(x => x.matId && x.qty>0 && matById(x.matId));
 
       if(draft.outputs.length === 0){
         alert("アウトプットを1つ以上設定してください。");
@@ -1837,6 +2083,7 @@
       refreshAllSelects();
       renderRecipes();
       renderMaterials();
+      isDirty = false;
       closeModal();
     });
 
@@ -1863,8 +2110,8 @@
   // 全体のセレクト類更新
   // --------------------------
   function refreshAllSelects(){
-    renderStopSelect();
     renderTargets();
+    renderFlowSelector();
   }
 
   // --------------------------
@@ -1970,14 +2217,14 @@
     }
 
     // UI整合
-    uiStopSet = new Set([...uiStopSet].filter(id => !!matById(id)));
+    uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = uiTargets.map(t => matById(t.matId) ? t : ({...t, matId:""}));
 
     saveState();
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
-    renderStopChips();
     alert("サンプルデータを削除しました。");
   }
 
@@ -2025,7 +2272,6 @@
       refreshAllSelects();
       renderMaterials();
       renderRecipes();
-      renderStopChips();
       alert("インポートしました。");
     }catch(e){
       alert("インポートに失敗しました: " + (e?.message || e));
@@ -2036,19 +2282,302 @@
     if(!confirm("全データを消去します。よろしいですか？")) return;
     state = deepClone(DEFAULT_STATE);
     saveState(state);
-    uiStopSet = new Set();
+    uiStopNodeSet = new Set();
+    uiCollapsedNodeSet = new Set();
     uiTargets = [{matId:"", qty:1}];
     lastComputeResult = null;
     refreshAllSelects();
     renderMaterials();
     renderRecipes();
-    renderStopChips();
     totalsEl.innerHTML = "";
     byproductsEl.innerHTML = "";
     treeEl.innerHTML = "";
     kpis.style.display = "none";
     errBox.style.display = "none";
+    renderFlowResult();
   });
+
+  // --------------------------
+  // 連鎖入力モード
+  // --------------------------
+  let chainIdSeq = 0;
+  let chainRoot = null;
+  function nextChainId(){ return "c_" + (++chainIdSeq); }
+
+  function makeChainRef(){ return {useNew:false, matId:"", newName:"", newKind:"item"}; }
+  function chainRefKind(ref){
+    if(ref.useNew) return (ref.newKind === "fluid") ? "fluid" : "item";
+    return matById(ref.matId)?.kind || "item";
+  }
+  function chainRefLabel(ref){
+    if(ref.useNew) return String(ref.newName||"").trim() || "(未入力)";
+    return matById(ref.matId)?.name || "(未選択)";
+  }
+
+  function newChainNode(depth=0){
+    return {id:nextChainId(), depth, outputQty:1, product:makeChainRef(), inputs:[], childByInputId:{}, children:[]};
+  }
+
+  function initChainMode(){
+    chainRoot = newChainNode(0);
+  }
+
+  function ensureChainRoot(){ if(!chainRoot) initChainMode(); }
+
+  function chainRefUnit(ref){
+    return chainRefKind(ref) === "fluid" ? "mB" : "個";
+  }
+
+  function renderChainRefInline(container, ref, onStructuralChange){
+    const mode = document.createElement("select");
+    mode.innerHTML = '<option value="existing">既存素材を選択</option><option value="new">新規素材を入力</option>';
+    mode.value = ref.useNew ? "new" : "existing";
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "search";
+    search.placeholder = "素材検索...";
+
+    const sel = document.createElement("select");
+    const syncSel = () => {
+      fillMaterialSelect(sel, {includeEmpty:true, emptyLabel:"(素材)", filterText:search.value});
+      if(ref.matId && [...sel.options].some(o => o.value === ref.matId)) sel.value = ref.matId;
+    };
+    syncSel();
+
+    const newName = document.createElement("input");
+    newName.type = "text";
+    newName.placeholder = "新規素材名";
+    newName.value = ref.newName || "";
+
+    const newKind = document.createElement("select");
+    newKind.innerHTML = '<option value="item">アイテム（個）</option><option value="fluid">液体（mB）</option>';
+    newKind.value = ref.newKind || "item";
+
+    function refreshVisible(){
+      const useNew = mode.value === "new";
+      ref.useNew = useNew;
+      search.style.display = useNew ? "none" : "";
+      sel.style.display = useNew ? "none" : "";
+      newName.style.display = useNew ? "" : "none";
+      newKind.style.display = useNew ? "" : "none";
+    }
+
+    mode.addEventListener("change", () => { refreshVisible(); onStructuralChange?.(); });
+    search.addEventListener("input", syncSel);
+    sel.addEventListener("change", () => { ref.matId = sel.value; onStructuralChange?.(); });
+    newName.addEventListener("input", () => { ref.newName = String(newName.value || ""); });
+    newName.addEventListener("change", () => { ref.newName = String(newName.value || ""); onStructuralChange?.(); });
+    newKind.addEventListener("change", () => { ref.newKind = newKind.value === "fluid" ? "fluid" : "item"; onStructuralChange?.(); });
+
+    container.appendChild(mode);
+    container.appendChild(search);
+    container.appendChild(sel);
+    container.appendChild(newName);
+    container.appendChild(newKind);
+    refreshVisible();
+  }
+
+  function chainSentence(node){
+    const name = chainRefLabel(node.product);
+    return fmtQty(node.outputQty || 0) + chainRefUnit(node.product) + "の「" + name + "」の原料は...";
+  }
+
+  function chainInputSentence(inp){
+    return fmtQty(inp.qty || 0) + chainRefUnit(inp.ref) + "の「" + chainRefLabel(inp.ref) + "」";
+  }
+
+  function syncChainChildren(node){
+    const keep = new Set();
+    node.inputs.forEach(inp => {
+      const hasMat = inp.ref.useNew ? !!String(inp.ref.newName||"").trim() : !!inp.ref.matId;
+      if(!hasMat) return;
+      let child = node.childByInputId[inp.id];
+      if(!child){
+        child = newChainNode((node.depth||0)+1);
+        child.outputQty = chainRefKind(inp.ref) === "fluid" ? 1000 : 1;
+        node.childByInputId[inp.id] = child;
+      }
+      child.product = JSON.parse(JSON.stringify(inp.ref));
+      keep.add(child.id);
+    });
+    node.children = Object.values(node.childByInputId).filter(c => keep.has(c.id));
+    for(const k of Object.keys(node.childByInputId)){
+      if(!keep.has(node.childByInputId[k].id)) delete node.childByInputId[k];
+    }
+  }
+
+  function renderChainNode(node, mount){
+    const box = document.createElement("div"); box.className = "chain-node";
+
+    const sentence = document.createElement("div");
+    sentence.className = "muted";
+    sentence.textContent = chainSentence(node);
+    box.appendChild(sentence);
+
+    const productRow = document.createElement("div");
+    productRow.className = "line-item io-row io-output";
+    const productLabel = document.createElement("div");
+    productLabel.className = "small muted";
+    productLabel.textContent = "製造物（1レシピ出力）";
+    const outQty = document.createElement("input");
+    outQty.type = "number";
+    outQty.step = "0.001";
+    outQty.min = "0";
+    outQty.className = "qty";
+    outQty.value = String(node.outputQty || 1);
+    const outUnit = document.createElement("span");
+    outUnit.className = "pill";
+    outUnit.textContent = chainRefUnit(node.product);
+    renderChainRefInline(productRow, node.product, () => { syncChainChildren(node); renderChainMode(); });
+    outQty.addEventListener("input", () => { node.outputQty = safeNumber(outQty.value); });
+    productRow.appendChild(productLabel);
+    productRow.appendChild(outQty);
+    productRow.appendChild(outUnit);
+    box.appendChild(productRow);
+
+    const inTitle = document.createElement("div");
+    inTitle.className = "muted small";
+    inTitle.textContent = "必要材料";
+    box.appendChild(inTitle);
+
+    for(const inp of node.inputs){
+      const row = document.createElement("div");
+      row.className = "line-item io-row io-input";
+      const lbl = document.createElement("div");
+      lbl.className = "small muted";
+      lbl.textContent = "必要数";
+      const qty = document.createElement("input");
+      qty.type = "number";
+      qty.step = "0.001";
+      qty.min = "0";
+      qty.className = "qty";
+      qty.value = String(inp.qty || 1);
+      const unit = document.createElement("span");
+      unit.className = "pill";
+      unit.textContent = chainRefUnit(inp.ref);
+      const refWrap = document.createElement("div");
+      refWrap.style.display = "contents";
+      renderChainRefInline(refWrap, inp.ref, () => { syncChainChildren(node); renderChainMode(); });
+      qty.addEventListener("input", () => { inp.qty = safeNumber(qty.value); });
+      const del = document.createElement("button");
+      del.className = "btn";
+      del.textContent = "削除";
+      del.addEventListener("click", () => {
+        node.inputs = node.inputs.filter(x => x.id !== inp.id);
+        syncChainChildren(node);
+        renderChainMode();
+      });
+      row.appendChild(lbl);
+      row.appendChild(refWrap);
+      row.appendChild(qty);
+      row.appendChild(unit);
+      row.appendChild(del);
+      box.appendChild(row);
+    }
+
+    const addIn = document.createElement("button");
+    addIn.className = "btn";
+    addIn.textContent = "必要材料を追加";
+    addIn.addEventListener("click", () => {
+      node.inputs.push({id:nextChainId(), ref:makeChainRef(), qty:1});
+      renderChainMode();
+    });
+    box.appendChild(addIn);
+
+    mount.appendChild(box);
+
+    syncChainChildren(node);
+    if(node.children.length){
+      const children = document.createElement("div"); children.className = "children";
+      for(const c of node.children) renderChainNode(c, children);
+      mount.appendChild(children);
+    }
+  }
+
+  function openChainModeModal(){
+    ensureChainRoot();
+    const wrap = document.createElement("div");
+
+    const top = document.createElement("div");
+    top.className = "row";
+    const reset = document.createElement("button");
+    reset.className = "btn";
+    reset.textContent = "連鎖入力をリセット";
+    reset.addEventListener("click", () => { initChainMode(); renderChainMode(); });
+    const save = document.createElement("button");
+    save.className = "btn primary";
+    save.textContent = "この連鎖をレシピに保存";
+    save.addEventListener("click", saveChainRecipes);
+    top.appendChild(reset);
+    top.appendChild(save);
+
+    chainModalTreeEl = document.createElement("div");
+    chainModalTreeEl.className = "chain-tree";
+    wrap.appendChild(top);
+    wrap.appendChild(chainModalTreeEl);
+
+    openModal("連鎖入力モード", wrap);
+    renderChainMode();
+  }
+
+  function renderChainMode(){
+    ensureChainRoot();
+    const mount = chainModalTreeEl || chainTreeEl;
+    if(!mount) return;
+    mount.innerHTML = "";
+    renderChainNode(chainRoot, mount);
+  }
+
+  function resolveChainMaterial(ref){
+    if(ref.useNew){
+      const name = String(ref.newName || "").trim();
+      if(!name) return "";
+      const kind = (ref.newKind === "fluid") ? "fluid" : "item";
+      const ex = state.materials.find(m => m.name === name && m.kind === kind);
+      if(ex) return ex.id;
+      const created = {id:uid("mat"), name, kind, isSample:false};
+      state.materials.push(created);
+      return created.id;
+    }
+    return String(ref.matId || "");
+  }
+
+  function collectChainRecipes(node, out){
+    const outMatId = resolveChainMaterial(node.product);
+    if(outMatId && node.outputQty > 0 && node.inputs.length){
+      const inputs = node.inputs.map(i => ({matId: resolveChainMaterial(i.ref), qty:safeNumber(i.qty)})).filter(x => x.matId && x.qty > 0);
+      if(inputs.length){
+        out.push({
+          id: uid("rec"),
+          category: "process",
+          name: "連鎖入力: " + (matById(outMatId)?.name || outMatId),
+          inputs,
+          outputs: [{matId: outMatId, qty: safeNumber(node.outputQty)}],
+          isSample:false
+        });
+      }
+    }
+    for(const c of node.children) collectChainRecipes(c, out);
+  }
+
+  function saveChainRecipes(){
+    ensureChainRoot();
+    const add = [];
+    collectChainRecipes(chainRoot, add);
+    if(add.length === 0){
+      alert("保存対象のレシピがありません。製造物・材料を入力してください。");
+      return;
+    }
+    state.recipes.push(...add);
+    saveState();
+    refreshAllSelects();
+    renderMaterials();
+    renderRecipes();
+    alert("連鎖入力から " + add.length + " 件のレシピを保存しました。");
+    closeModal();
+    showTab("recipes");
+  }
 
   // --------------------------
   // 初期描画
@@ -2056,12 +2585,12 @@
   btnAddMat.addEventListener("click", () => openMaterialEditor(null));
   btnAddRecipe.addEventListener("click", () => openRecipeEditor(null));
 
-  fillMaterialSelect(stopMatEl, {includeEmpty:true, emptyLabel:"(素材を選択)"});
   renderTargets();
-  renderStopSelect();
-  renderStopChips();
+  renderFlowSelector();
+  renderFlowResult();
   renderMaterials();
   renderRecipes();
+  initChainMode();
 })();
 </script>
 </body>
